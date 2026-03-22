@@ -1,0 +1,105 @@
+{
+  "manual": [
+    {
+      "title": "Graded Cards",
+      "handle": "graded-cards",
+      "body_html": "<p>PSA, BGS, and CGC authenticated slabs. Every cert number verified.</p>",
+      "sort_order": "price-desc",
+      "seo_title": "Graded Pokémon Cards — PSA, BGS, CGC Slabs | Card Yeti",
+      "seo_description": "Authenticated graded Pokémon cards from PSA, BGS, and CGC. Cert-verified, population data included. Priced below eBay market comps. Free shipping on orders over $75."
+    },
+    {
+      "title": "Japanese Cards",
+      "handle": "japanese-cards",
+      "body_html": "<p>Graded Japanese cards — Art Rares, Special Art Rares, and Japan-exclusive sets.</p>",
+      "sort_order": "created-desc",
+      "seo_title": "Japanese Pokémon Cards — Graded Art Rares, SARs & More | Card Yeti",
+      "seo_description": "Graded Japanese Pokémon cards including Art Rares, Special Art Rares, and Japan-exclusive sets. Cert-verified and priced below eBay. Free shipping over $75."
+    },
+    {
+      "title": "Sealed Product",
+      "handle": "sealed-product",
+      "body_html": "<p>Factory-sealed booster boxes, ETBs, packs, and tins. Climate-controlled storage.</p>",
+      "sort_order": "price-desc",
+      "seo_title": "Sealed Pokémon Product — Booster Boxes, ETBs & Packs | Card Yeti",
+      "seo_description": "Factory-sealed Pokémon booster boxes, Elite Trainer Boxes, and packs. Climate-controlled storage. Free shipping on orders over $75."
+    },
+    {
+      "title": "Vintage Cards",
+      "handle": "vintage-cards",
+      "body_html": "<p>WOTC-era cards from Base Set through Skyridge (1999–2003). Graded and authenticated.</p>",
+      "sort_order": "price-desc",
+      "seo_title": "Vintage Pokémon Cards — WOTC Base Set to Skyridge | Card Yeti",
+      "seo_description": "Vintage graded Pokémon cards from the WOTC era — Base Set, Jungle, Fossil, Team Rocket, Neo, and more. Cert-verified and priced below eBay. Free shipping over $75."
+    },
+    {
+      "title": "Modern Cards",
+      "handle": "modern-cards",
+      "body_html": "<p>Graded cards from EX series through present. The latest hits and chase cards.</p>",
+      "sort_order": "created-desc",
+      "seo_title": "Modern Pokémon Cards — Graded Singles | Card Yeti",
+      "seo_description": "Modern graded Pokémon cards from EX series through Scarlet & Violet. Chase cards, alt arts, and full art trainers. Cert-verified. Free shipping over $75."
+    },
+    {
+      "title": "Featured",
+      "handle": "featured",
+      "body_html": "<p>Our top picks — updated regularly.</p>",
+      "sort_order": "manual",
+      "seo_title": "Featured Pokémon Cards — Staff Picks | Card Yeti",
+      "seo_description": "Hand-selected featured Pokémon cards from Card Yeti. Graded slabs chosen by collectors for collectors."
+    }
+  ],
+  "smart": [
+    {
+      "title": "Under $25",
+      "handle": "under-25",
+      "body_html": "<p>Quality Pokémon cards at accessible price points.</p>",
+      "sort_order": "price-asc",
+      "rules": [
+        { "column": "variant_price", "relation": "less_than", "condition": "25.00" }
+      ],
+      "seo_title": "Pokémon Cards Under $25 — Affordable Graded Slabs | Card Yeti",
+      "seo_description": "Quality graded Pokémon cards under $25. Authenticated slabs at accessible price points. Free shipping on orders over $75."
+    },
+    {
+      "title": "$25 – $100",
+      "handle": "25-to-100",
+      "body_html": "",
+      "sort_order": "price-asc",
+      "rules": [
+        { "column": "variant_price", "relation": "greater_than", "condition": "24.99" },
+        { "column": "variant_price", "relation": "less_than", "condition": "100.00" }
+      ]
+    },
+    {
+      "title": "$100 – $500",
+      "handle": "100-to-500",
+      "body_html": "",
+      "sort_order": "price-desc",
+      "rules": [
+        { "column": "variant_price", "relation": "greater_than", "condition": "99.99" },
+        { "column": "variant_price", "relation": "less_than", "condition": "500.00" }
+      ]
+    },
+    {
+      "title": "High-End ($500+)",
+      "handle": "high-end",
+      "body_html": "",
+      "sort_order": "price-desc",
+      "rules": [
+        { "column": "variant_price", "relation": "greater_than", "condition": "499.99" }
+      ]
+    },
+    {
+      "title": "New Arrivals",
+      "handle": "new-arrivals",
+      "body_html": "<p>The latest additions to Card Yeti.</p>",
+      "sort_order": "created-desc",
+      "rules": [
+        { "column": "tag", "relation": "equals", "condition": "new-arrival" }
+      ],
+      "seo_title": "New Pokémon Cards Just Listed | Card Yeti",
+      "seo_description": "The latest additions to Card Yeti. Freshly listed graded slabs and sealed product. Updated daily. Free shipping over $75."
+    }
+  ]
+}

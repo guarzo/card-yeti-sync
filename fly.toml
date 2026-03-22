@@ -1,0 +1,30 @@
+# fly.toml app configuration file generated for card-yeti-sync on 2026-03-22T01:48:04-04:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'card-yeti-sync'
+primary_region = 'ord'
+
+[build]
+
+[env]
+  PORT = '3000'
+  SCOPES = 'read_inventory,read_orders,read_products,write_inventory,write_products'
+  SHOPIFY_APP_URL = 'https://card-yeti-sync.fly.dev'
+
+[processes]
+  app = 'npm run docker-start'
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
+
+[[vm]]
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 512

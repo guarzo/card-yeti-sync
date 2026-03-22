@@ -1,0 +1,154 @@
+[
+  {
+    "name": "Set Name",
+    "namespace": "card",
+    "key": "set_name",
+    "type": "single_line_text_field",
+    "description": "Card set name, e.g. Base Set, Obsidian Flames",
+    "ownerType": "PRODUCT"
+  },
+  {
+    "name": "Card Number",
+    "namespace": "card",
+    "key": "number",
+    "type": "single_line_text_field",
+    "description": "Card number within set, e.g. 4/102, AR",
+    "ownerType": "PRODUCT"
+  },
+  {
+    "name": "Pokémon Name",
+    "namespace": "card",
+    "key": "pokemon",
+    "type": "single_line_text_field",
+    "description": "Pokémon name, e.g. Charizard",
+    "ownerType": "PRODUCT"
+  },
+  {
+    "name": "Rarity",
+    "namespace": "card",
+    "key": "rarity",
+    "type": "single_line_text_field",
+    "description": "Card rarity, e.g. Holo Rare, Art Rare",
+    "ownerType": "PRODUCT"
+  },
+  {
+    "name": "Year",
+    "namespace": "card",
+    "key": "year",
+    "type": "single_line_text_field",
+    "description": "Card print year, e.g. 1999, 2023",
+    "ownerType": "PRODUCT"
+  },
+  {
+    "name": "Language",
+    "namespace": "card",
+    "key": "language",
+    "type": "single_line_text_field",
+    "description": "Card language: English or Japanese",
+    "ownerType": "PRODUCT"
+  },
+  {
+    "name": "Condition",
+    "namespace": "card",
+    "key": "condition",
+    "type": "single_line_text_field",
+    "description": "Raw card condition: Near Mint, Lightly Played, Moderately Played, Heavily Played",
+    "ownerType": "PRODUCT"
+  },
+  {
+    "name": "Condition Notes",
+    "namespace": "card",
+    "key": "condition_notes",
+    "type": "multi_line_text_field",
+    "description": "Detailed condition notes: front, back, edges, corners, holo",
+    "ownerType": "PRODUCT"
+  },
+  {
+    "name": "Centering",
+    "namespace": "card",
+    "key": "centering",
+    "type": "single_line_text_field",
+    "description": "Card centering, e.g. 55/45 LR, 50/50 TB",
+    "ownerType": "PRODUCT"
+  },
+  {
+    "name": "Grading Company",
+    "namespace": "card",
+    "key": "grading_company",
+    "type": "single_line_text_field",
+    "description": "Grading company: PSA, BGS, or CGC",
+    "ownerType": "PRODUCT"
+  },
+  {
+    "name": "Grade",
+    "namespace": "card",
+    "key": "grade",
+    "type": "single_line_text_field",
+    "description": "Numeric grade, e.g. 9, 10, 9.5, AUTH",
+    "ownerType": "PRODUCT"
+  },
+  {
+    "name": "Cert Number",
+    "namespace": "card",
+    "key": "cert_number",
+    "type": "single_line_text_field",
+    "description": "Grading certification number",
+    "ownerType": "PRODUCT"
+  },
+  {
+    "name": "Population at Grade",
+    "namespace": "card",
+    "key": "population",
+    "type": "number_integer",
+    "description": "Population report count at this grade",
+    "ownerType": "PRODUCT"
+  },
+  {
+    "name": "Population Higher",
+    "namespace": "card",
+    "key": "pop_higher",
+    "type": "number_integer",
+    "description": "Population report count higher than this grade",
+    "ownerType": "PRODUCT"
+  },
+  {
+    "name": "Sub-Grades",
+    "namespace": "card",
+    "key": "subgrades",
+    "type": "single_line_text_field",
+    "description": "BGS sub-grades, e.g. C 9 / E 9.5 / S 9 / C 9.5",
+    "ownerType": "PRODUCT"
+  },
+  {
+    "name": "eBay Comp Price",
+    "namespace": "card",
+    "key": "ebay_comp",
+    "type": "number_decimal",
+    "description": "Most recent eBay sold comparable price",
+    "ownerType": "PRODUCT"
+  },
+  {
+    "name": "Cert Verification URL",
+    "namespace": "card",
+    "key": "cert_url",
+    "type": "url",
+    "description": "Direct link to grading company cert verification",
+    "ownerType": "PRODUCT"
+  },
+  {
+    "name": "Product Type Label",
+    "namespace": "card",
+    "key": "type_label",
+    "type": "single_line_text_field",
+    "description": "Product type: Raw Single, Graded Slab, Curated Lot, Sealed Product",
+    "ownerType": "PRODUCT"
+  },
+  {
+    "name": "eBay Item ID",
+    "namespace": "card",
+    "key": "ebay_item_id",
+    "type": "single_line_text_field",
+    "description": "eBay legacy item ID for source listing traceability",
+    "ownerType": "PRODUCT"
+  }
+]
