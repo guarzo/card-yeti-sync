@@ -1,0 +1,80 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:dev.sqlite"
+}
+
+// Shopify session management (required by the framework)
+model Session {
+  id            String    @id
+  shop          String
+  state         String
+  isOnline      Boolean   @default(false)
+  scope         String?
+  expires       DateTime?
+  accessToken   String
+  userId        BigInt?
+  firstName     String?
+  lastName      String?
+  email         String?
+  accountOwner  Boolean   @default(false)
+  locale        String?
+  collaborator  Boolean?  @default(false)
+  emailVerified Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+}
+
+// Stores OAuth tokens and settings for each marketplace connection per shop
+model MarketplaceAccount {
+  id           String   @id @default(cuid())
+  shopId       String // e.g. "card-yeti.myshopify.com"
+  marketplace  String // "ebay" | "whatnot" | "helix"
+  accessToken  String
+  refreshToken String?
+  tokenExpiry  DateTime?
+  settings     String   @default("{}") // JSON: policy IDs, sync rules, pricing rules
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  listings MarketplaceListing[]
+
+  @@unique([shopId, marketplace])
+}
+
+// Tracks the state of each product listing on each marketplace
+model MarketplaceListing {
+  id               String    @id @default(cuid())
+  shopId           String
+  shopifyProductId String
+  marketplace      String
+  marketplaceId    String? // eBay listing ID, Helix listing ID, etc.
+  offerId          String? // eBay offer ID (needed for publish/unpublish)
+  status           String // "active" | "delisted" | "error" | "pending"
+  lastSyncedAt     DateTime?
+  errorMessage     String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  account MarketplaceAccount @relation(fields: [shopId, marketplace], references: [shopId, marketplace])
+
+  @@unique([shopId, shopifyProductId, marketplace])
+  @@index([shopId, marketplace, status])
+}
+
+// Audit trail for all sync operations
+model SyncLog {
+  id          String   @id @default(cuid())
+  shopId      String
+  marketplace String
+  action      String // "list" | "delist" | "update" | "reconcile" | "price_update"
+  productId   String?
+  status      String // "success" | "error"
+  details     String? // JSON with additional context
+  createdAt   DateTime @default(now())
+
+  @@index([shopId, createdAt])
+}
