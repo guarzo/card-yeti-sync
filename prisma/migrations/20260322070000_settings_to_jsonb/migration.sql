@@ -8,5 +8,6 @@ END;
 $$ LANGUAGE plpgsql IMMUTABLE;
 
 -- AlterColumn: change settings from TEXT to JSONB with safe fallback for invalid values
+ALTER TABLE "MarketplaceAccount" ALTER COLUMN "settings" DROP DEFAULT;
 ALTER TABLE "MarketplaceAccount" ALTER COLUMN "settings" SET DATA TYPE JSONB USING pg_temp.safe_to_jsonb(COALESCE("settings", '{}'));
-ALTER TABLE "MarketplaceAccount" ALTER COLUMN "settings" SET DEFAULT '{}';
+ALTER TABLE "MarketplaceAccount" ALTER COLUMN "settings" SET DEFAULT '{}'::jsonb;

@@ -9,7 +9,7 @@ import type {
 import { useLoaderData, useSearchParams, useRouteError } from "react-router";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { getAuthorizationUrl, revokeToken } from "../lib/ebay-client.server";
+import { getAuthorizationUrl } from "../lib/ebay-client.server";
 import db from "../db.server";
 import { daysUntil } from "../lib/ui-helpers";
 import { generateHmacState } from "../lib/hmac-state.server";
@@ -76,30 +76,34 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
-  // Look up product titles for error display
+  // Look up product titles for error display (non-critical — don't crash loader)
   const productTitles: Record<string, string> = {};
   if (recentErrors.length > 0) {
     const ids = recentErrors
       .map((e) => e.shopifyProductId)
       .filter((id) => id.startsWith("gid://"));
     if (ids.length > 0) {
-      const titleResponse = await admin.graphql(
-        `#graphql
-        query getProductTitles($ids: [ID!]!) {
-          nodes(ids: $ids) {
-            ... on Product {
-              id
-              title
+      try {
+        const titleResponse = await admin.graphql(
+          `#graphql
+          query getProductTitles($ids: [ID!]!) {
+            nodes(ids: $ids) {
+              ... on Product {
+                id
+                title
+              }
             }
+          }`,
+          { variables: { ids } },
+        );
+        const titleData = await titleResponse.json();
+        for (const node of titleData.data?.nodes ?? []) {
+          if (node?.id && node?.title) {
+            productTitles[node.id] = node.title;
           }
-        }`,
-        { variables: { ids } },
-      );
-      const titleData = await titleResponse.json();
-      for (const node of titleData.data?.nodes ?? []) {
-        if (node?.id && node?.title) {
-          productTitles[node.id] = node.title;
         }
+      } catch (err) {
+        console.warn("Failed to fetch product titles for error display:", err);
       }
     }
   }
@@ -137,14 +141,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const intent = formData.get("intent");
 
   if (intent === "disconnect") {
-    // Revoke eBay tokens before deleting records
-    const account = await db.marketplaceAccount.findUnique({
-      where: { shopId_marketplace: { shopId: shop, marketplace: "ebay" } },
-    });
-    if (account?.refreshToken) {
-      await revokeToken(account.refreshToken);
-    }
-
+    // eBay OAuth2 does not support API token revocation;
+    // users must revoke via eBay account settings.
     await db.$transaction([
       db.marketplaceListing.deleteMany({
         where: { shopId: shop, marketplace: "ebay" },

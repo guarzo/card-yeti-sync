@@ -1,3 +1,14 @@
+:root {
+  --color-background: #f0f5f8;
+  --color-primary: #1a2744;
+  --color-primary-hover: #2a3d5c;
+  --color-primary-active: #0f1a2e;
+  --color-text-muted: #4a6a8a;
+  --color-text-secondary: #6a8aaa;
+  --color-border: #a8c4d8;
+  --color-accent: #3a7ab5;
+}
+
 .index {
   align-items: center;
   display: flex;
@@ -6,7 +17,7 @@
   width: 100%;
   text-align: center;
   padding: 2rem 1rem;
-  background: #f0f5f8;
+  background: var(--color-background);
   font-family:
     Inter,
     -apple-system,
@@ -14,7 +25,7 @@
     "Segoe UI",
     Roboto,
     sans-serif;
-  color: #1a2744;
+  color: var(--color-primary);
 }
 
 .logoHeading {
@@ -29,11 +40,10 @@
 }
 
 .text {
-  padding: 0;
+  padding: 0 0 2rem 0;
   margin: 0;
   font-size: 1.15rem;
-  color: #4a6a8a;
-  padding-bottom: 2rem;
+  color: var(--color-text-muted);
 }
 
 .content {
@@ -56,18 +66,18 @@
   text-align: left;
   font-size: 0.95rem;
   font-weight: 500;
-  color: #1a2744;
+  color: var(--color-primary);
 }
 
 .label > span:last-child {
   font-size: 0.8rem;
-  color: #6a8aaa;
+  color: var(--color-text-secondary);
   font-weight: 400;
 }
 
 .input {
   padding: 0.5rem 0.75rem;
-  border: 1px solid #a8c4d8;
+  border: 1px solid var(--color-border);
   border-radius: 6px;
   font-size: 0.95rem;
   transition:
@@ -77,13 +87,13 @@
 
 .input:focus-visible {
   outline: none;
-  border-color: #3a7ab5;
+  border-color: var(--color-accent);
   box-shadow: 0 0 0 2px rgba(58, 122, 181, 0.2);
 }
 
 .button {
   padding: 0.5rem 1.25rem;
-  background: #1a2744;
+  background: var(--color-primary);
   color: white;
   border: none;
   border-radius: 6px;
@@ -94,15 +104,15 @@
 }
 
 .button:hover {
-  background: #2a3d5c;
+  background: var(--color-primary-hover);
 }
 
 .button:active {
-  background: #0f1a2e;
+  background: var(--color-primary-active);
 }
 
 .button:focus-visible {
-  outline: 2px solid #3a7ab5;
+  outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }
 
@@ -118,7 +128,7 @@
   max-width: 20rem;
   text-align: left;
   line-height: 1.5;
-  color: #2a3d5c;
+  color: var(--color-primary-hover);
 }
 
 @media only screen and (max-width: 50rem) {

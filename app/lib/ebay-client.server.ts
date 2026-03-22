@@ -189,24 +189,3 @@ export type TokenUpdate = {
   tokenExpiry: Date;
 };
 
-/**
- * Revoke an eBay OAuth token (typically the refresh token).
- * Logs warnings but never throws — disconnect flow must always complete.
- */
-export async function revokeToken(token: string): Promise<void> {
-  const endpoints = getEndpoints();
-  const res = await fetch(`${endpoints.api}/identity/v1/oauth2/token`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Authorization: `Basic ${getBasicAuth()}`,
-    },
-    body: new URLSearchParams({ token }),
-  });
-
-  if (!res.ok) {
-    console.warn(
-      `eBay token revocation failed: ${res.status} ${await res.text()}`,
-    );
-  }
-}

@@ -179,9 +179,20 @@ export default function Dashboard() {
     (sum, m) => sum + m.errorCount,
     0,
   );
+  const expiredTokens = Object.entries(marketplaces)
+    .filter(
+      ([, m]) => m.connected && m.tokenExpiry && daysUntil(m.tokenExpiry) <= 0,
+    )
+    .map(
+      ([name]) => MARKETPLACE_CONFIG[name as MarketplaceKey]?.label ?? name,
+    );
   const expiringTokens = Object.entries(marketplaces)
     .filter(
-      ([, m]) => m.connected && m.tokenExpiry && daysUntil(m.tokenExpiry) <= 7,
+      ([, m]) =>
+        m.connected &&
+        m.tokenExpiry &&
+        daysUntil(m.tokenExpiry) > 0 &&
+        daysUntil(m.tokenExpiry) <= 7,
     )
     .map(
       ([name]) => MARKETPLACE_CONFIG[name as MarketplaceKey]?.label ?? name,
@@ -194,6 +205,13 @@ export default function Dashboard() {
         <s-banner tone="critical" dismissible>
           {totalErrors} listing{totalErrors !== 1 ? "s" : ""} with errors across
           your marketplaces. Review and retry from each marketplace page.
+        </s-banner>
+      )}
+      {expiredTokens.length > 0 && (
+        <s-banner tone="critical" dismissible>
+          {expiredTokens.join(", ")} token
+          {expiredTokens.length > 1 ? "s have" : " has"} expired. Reconnect to
+          resume syncing.
         </s-banner>
       )}
       {expiringTokens.length > 0 && (

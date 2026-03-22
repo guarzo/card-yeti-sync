@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>Multi-marketplace sync for Pokemon card sellers on Shopify</strong>
+  <strong>Multi-marketplace sync for Pokémon card sellers on Shopify</strong>
 </p>
 
 <p align="center">
@@ -15,7 +15,7 @@
 
 ---
 
-Card Yeti Sync is an embedded Shopify app that syncs your Pokemon card inventory across marketplaces from a single dashboard. eBay integration is live; Whatnot supports CSV export, and Helix integration is planned.
+Card Yeti Sync is an embedded Shopify app that syncs your Pokémon card inventory across marketplaces from a single dashboard. eBay integration is live; Whatnot supports CSV export, and Helix integration is planned.
 
 ## Features
 
@@ -40,7 +40,7 @@ Direct integration via the Sell Inventory API with OAuth token management and au
 Generates Whatnot Seller Hub-compatible CSVs with rich descriptions built from card metafields. Full API integration planned when the Whatnot Seller API exits Developer Preview.
 
 ### Helix
-Integration with the new Pokemon card marketplace featuring 4.9% seller fees and real-time pricing data. Structured data sync with full card metadata. Awaiting API access.
+Integration with the new Pokémon card marketplace featuring 4.9% seller fees and real-time pricing data. Structured data sync with full card metadata. Awaiting API access.
 
 ## Tech Stack
 

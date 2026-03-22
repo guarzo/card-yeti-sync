@@ -11,7 +11,7 @@ function getApiSecret(): string {
 export function generateHmacState(shop: string, nonce: string): string {
   const hmac = crypto
     .createHmac("sha256", getApiSecret())
-    .update(shop + nonce)
+    .update(`${shop}:${nonce}`)
     .digest("base64url");
   return Buffer.from(JSON.stringify({ shop, nonce, hmac })).toString(
     "base64url",
@@ -50,7 +50,7 @@ export function validateHmacState(
 
   const expectedHmac = crypto
     .createHmac("sha256", getApiSecret())
-    .update(stateShop + stateNonce)
+    .update(`${stateShop}:${stateNonce}`)
     .digest("base64url");
 
   const a = Buffer.from(stateHmac);
