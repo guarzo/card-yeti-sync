@@ -5,7 +5,7 @@
 <h2 align="center">Shopify Integration Proposal for Helix</h2>
 
 <p align="center">
-  <em>A public Shopify app that lets any Pokemon card seller sync their inventory to Helix automatically</em>
+  <em>A public Shopify app that lets any Pokémon card seller sync their inventory to Helix automatically</em>
 </p>
 
 <p align="center">
@@ -23,15 +23,15 @@
 
 ## The Idea
 
-A public Shopify app that lets **any** Pokemon card seller sync their inventory to Helix automatically. Any TCG seller on Shopify installs the app, connects their Helix account, and starts listing. Helix gets access to the entire Shopify TCG seller ecosystem through a single integration.
+A public Shopify app that lets **any** Pokémon card seller sync their inventory to Helix automatically. Any TCG seller on Shopify installs the app, connects their Helix account, and starts listing. Helix gets access to the entire Shopify TCG seller ecosystem through a single integration.
 
-> **One integration, unlimited sellers.** The app is public on the Shopify App Store, so every Pokemon card seller on Shopify becomes a potential Helix seller — no individual onboarding required.
+> **One integration, unlimited sellers.** The app is public on the Shopify App Store, so every Pokémon card seller on Shopify becomes a potential Helix seller — no individual onboarding required.
 
 ---
 
 ## What's Already Built
 
-I run a Pokemon card shop on Shopify ([Card Yeti](https://cardyeti.com)) and I've been building tooling to sync inventory across eBay, Shopify, and Whatnot. Here's the current state:
+I run a Pokémon card shop on Shopify ([Card Yeti](https://cardyeti.com)) and I've been building tooling to sync inventory across eBay, Shopify, and Whatnot. Here's the current state:
 
 | Component | Status | Description |
 |:----------|:-------|:------------|
@@ -41,7 +41,7 @@ I run a Pokemon card shop on Shopify ([Card Yeti](https://cardyeti.com)) and I'v
 | **19 Card Metafields** | Live in Production | Structured data per card across hundreds of products |
 | **Cross-Channel Delist** | In Development | Auto-remove from other channels when a card sells |
 
-The app uses an **adapter pattern** — each marketplace gets its own adapter behind a consistent interface. Adding Helix would follow the exact same pattern as the eBay adapter already in development.
+The app uses an **adapter pattern** — each marketplace gets its own adapter behind a consistent interface. Adding Helix would follow the same pattern as the eBay adapter already in development.
 
 ### Structured Card Data
 
@@ -52,7 +52,7 @@ Every card in the Shopify store has 19 custom metafields under the `card` namesp
 <td width="33%" valign="top">
 
 **Card Identity**
-- Pokemon name
+- Pokémon name
 - Set name
 - Card number
 - Language
@@ -166,7 +166,7 @@ POST /api/v1/auth/token
 }
 ```
 
-> **The flywheel:** Sellers use Helix pricing to set competitive prices everywhere, which builds Helix's brand as *the* pricing authority for Pokemon cards. Even sellers who don't list on Helix directly would be consuming Helix pricing data.
+> **The flywheel:** Sellers use Helix pricing to set competitive prices everywhere, which builds Helix's brand as *the* pricing authority for Pokémon cards. Even sellers who don't list on Helix directly would be consuming Helix pricing data.
 
 #### Webhooks
 
@@ -178,7 +178,7 @@ POST /api/v1/auth/token
 
 #### Rate Limiting
 
-100 requests/minute per seller. Can be adjusted based on usage patterns post-launch.
+100 requests/minute per seller. Rate limits can be adjusted based on usage patterns post-launch.
 
 ---
 
@@ -430,7 +430,7 @@ Full bidirectional sync. Helix becomes the pricing engine sellers use everywhere
 
 **For Helix**
 
-- **Instant seller base** — Every Shopify Pokemon card seller is a potential Helix seller through one app install
+- **Instant seller base** — Every Shopify Pokémon card seller is a potential Helix seller through one app install
 - **Rich structured data** — 19 parsed card fields per listing, ready for search, filtering, and analytics
 - **Pricing authority** — API consumers build Helix's brand as where prices are set, even across other channels
 
@@ -439,7 +439,7 @@ Full bidirectional sync. Helix becomes the pricing engine sellers use everywhere
 
 **For Sellers**
 
-- **Zero friction onboarding** — Install app, connect, sync. Live on Helix in minutes
+- **Zero-friction onboarding** — Install app, connect, sync. Live on Helix in minutes
 - **No double-sells** — Cross-channel delisting happens automatically
 - **Better pricing** — Helix market data informs pricing across all channels
 - **Lower fees** — 4.9% vs 12.9% on eBay

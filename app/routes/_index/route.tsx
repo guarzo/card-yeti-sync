@@ -25,11 +25,15 @@ export default function App() {
   return (
     <div className={styles.index}>
       <div className={styles.content}>
-        <img
-          src="/card-yeti-logo.png"
-          alt="Card Yeti"
-          className={styles.logo}
-        />
+        <h1 className={styles.logoHeading}>
+          <img
+            src="/card-yeti-logo.png"
+            alt="Card Yeti"
+            width={6250}
+            height={4167}
+            className={styles.logo}
+          />
+        </h1>
         <p className={styles.text}>
           Sync your Shopify card inventory to eBay, Whatnot, and Helix from one
           dashboard.

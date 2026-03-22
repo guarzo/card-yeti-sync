@@ -6,7 +6,7 @@ declare module "react" {
     interface IntrinsicElements {
       "s-app-nav": { children?: ReactNode };
       "s-resource-list": { children?: ReactNode };
-      "s-resource-item": { key?: any; url?: string; children?: ReactNode };
+      "s-resource-item": { key?: string | number; url?: string; children?: ReactNode };
     }
   }
 }

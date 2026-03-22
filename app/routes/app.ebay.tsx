@@ -9,9 +9,10 @@ import type {
 import { useLoaderData, useSearchParams, useRouteError } from "react-router";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { getAuthorizationUrl } from "../lib/ebay-client.server";
+import { getAuthorizationUrl, revokeToken } from "../lib/ebay-client.server";
 import db from "../db.server";
 import { daysUntil } from "../lib/ui-helpers";
+import { generateHmacState } from "../lib/hmac-state.server";
 import { ConnectionCard } from "../components/ConnectionCard";
 import { StatCard } from "../components/StatCard";
 import { RelativeTime } from "../components/RelativeTime";
@@ -103,14 +104,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }
   }
 
-  // Generate HMAC-signed OAuth state for CSRF protection
-  const hmac = crypto
-    .createHmac("sha256", process.env.SHOPIFY_API_SECRET!)
-    .update(shop)
-    .digest("base64url");
-  const state = Buffer.from(JSON.stringify({ shop, hmac })).toString(
-    "base64url",
-  );
+  // Generate HMAC-signed OAuth state with nonce for CSRF/replay protection
+  const nonce = crypto.randomBytes(32).toString("base64url");
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+  // Clean up expired nonces, then store new one
+  await db.oAuthNonce.deleteMany({ where: { expiresAt: { lt: new Date() } } });
+  await db.oAuthNonce.create({ data: { shopId: shop, nonce, expiresAt } });
+
+  const state = generateHmacState(shop, nonce);
   const authUrl = getAuthorizationUrl(state);
 
   return {
@@ -135,6 +137,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const intent = formData.get("intent");
 
   if (intent === "disconnect") {
+    // Revoke eBay tokens before deleting records
+    const account = await db.marketplaceAccount.findUnique({
+      where: { shopId_marketplace: { shopId: shop, marketplace: "ebay" } },
+    });
+    if (account?.refreshToken) {
+      await revokeToken(account.refreshToken);
+    }
+
     await db.$transaction([
       db.marketplaceListing.deleteMany({
         where: { shopId: shop, marketplace: "ebay" },
@@ -164,7 +174,10 @@ export default function EbaySettings() {
   const success = searchParams.get("success");
   const error = searchParams.get("error");
 
-  const tokenDays = tokenExpiry ? daysUntil(tokenExpiry) : null;
+  const tokenExpired =
+    tokenExpiry != null && new Date(tokenExpiry).getTime() <= Date.now();
+  const tokenDays =
+    tokenExpiry && !tokenExpired ? daysUntil(tokenExpiry) : null;
 
   // Clean up URL params after reading
   useEffect(() => {
@@ -172,7 +185,7 @@ export default function EbaySettings() {
       const url = new URL(window.location.href);
       url.searchParams.delete("success");
       url.searchParams.delete("error");
-      window.history.replaceState({}, "", url.pathname);
+      window.history.replaceState({}, "", url.pathname + url.search + url.hash);
     }
   }, [success, error]);
 
@@ -228,10 +241,19 @@ export default function EbaySettings() {
                 value={
                   <s-stack direction="inline" gap="small" alignItems="center">
                     <span>
-                      {tokenDays !== null ? `${tokenDays} days` : "Unknown"}
+                      {tokenExpired
+                        ? "Expired"
+                        : tokenDays !== null
+                          ? `${tokenDays} days`
+                          : "Unknown"}
                     </span>
-                    {tokenDays !== null && tokenDays <= 7 && (
-                      <s-badge tone="warning">Renew soon</s-badge>
+                    {tokenExpired ? (
+                      <s-badge tone="critical">Reconnect</s-badge>
+                    ) : (
+                      tokenDays !== null &&
+                      tokenDays <= 7 && (
+                        <s-badge tone="warning">Renew soon</s-badge>
+                      )
                     )}
                   </s-stack>
                 }

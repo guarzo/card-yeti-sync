@@ -1,17 +1,15 @@
-import { Form, useNavigation } from "react-router";
+import { useFetcher } from "react-router";
 
 interface DisconnectButtonProps {
   marketplace: string;
 }
 
 export function DisconnectButton({ marketplace }: DisconnectButtonProps) {
-  const navigation = useNavigation();
-  const isDisconnecting =
-    navigation.state === "submitting" &&
-    navigation.formData?.get("intent") === "disconnect";
+  const fetcher = useFetcher();
+  const isDisconnecting = fetcher.state === "submitting";
 
   return (
-    <Form
+    <fetcher.Form
       method="post"
       onSubmit={(e) => {
         if (
@@ -32,6 +30,6 @@ export function DisconnectButton({ marketplace }: DisconnectButtonProps) {
       >
         {isDisconnecting ? "Disconnecting..." : "Disconnect"}
       </s-button>
-    </Form>
+    </fetcher.Form>
   );
 }

@@ -2,9 +2,7 @@ import { useState, useEffect } from "react";
 import { relativeTime } from "./ui-helpers";
 
 export function useRelativeTime(date: Date | string): string {
-  const [text, setText] = useState(() =>
-    new Date(date).toLocaleDateString(),
-  );
+  const [text, setText] = useState("");
 
   useEffect(() => {
     setText(relativeTime(date));

@@ -11,12 +11,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   // If this webhook already ran, the session may have been deleted previously.
   // Clean up all app data in FK-safe order (all use deleteMany for idempotency).
   if (session) {
-    await db.$transaction([
-      db.syncLog.deleteMany({ where: { shopId: shop } }),
-      db.marketplaceListing.deleteMany({ where: { shopId: shop } }),
-      db.marketplaceAccount.deleteMany({ where: { shopId: shop } }),
-      db.session.deleteMany({ where: { shop } }),
-    ]);
+    await db.$transaction(async (tx) => {
+      await tx.syncLog.deleteMany({ where: { shopId: shop } });
+      await tx.marketplaceListing.deleteMany({ where: { shopId: shop } });
+      await tx.marketplaceAccount.deleteMany({ where: { shopId: shop } });
+      await tx.oAuthNonce.deleteMany({ where: { shopId: shop } });
+      await tx.session.deleteMany({ where: { shop } });
+    });
   }
 
   return new Response();

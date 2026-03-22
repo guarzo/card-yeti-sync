@@ -15,14 +15,14 @@
 
 ---
 
-Card Yeti Sync is an embedded Shopify app that syncs your Pokemon card inventory to eBay, Whatnot, and Helix from a single dashboard. When a card sells on any channel, it's automatically delisted everywhere else.
+Card Yeti Sync is an embedded Shopify app that syncs your Pokemon card inventory across marketplaces from a single dashboard. eBay integration is live; Whatnot supports CSV export, and Helix integration is planned.
 
 ## Features
 
-- **One dashboard for all marketplaces** — View products, listing status, and sync activity across every channel from Shopify admin
-- **Automatic cross-channel delisting** — Card sells on eBay? Instantly removed from Whatnot and Helix
+- **One dashboard for all marketplaces** — View products, listing status, and sync activity from Shopify admin (eBay live, Whatnot CSV, Helix planned)
+- **Automatic cross-channel delisting** — When a card sells on one channel, it's delisted on connected marketplaces (eBay live; Whatnot and Helix coming soon)
 - **Rich card metadata** — 19 custom metafields (set, number, grade, cert, condition, etc.) mapped to each marketplace's native format
-- **Real-time inventory sync** — Webhook-driven updates keep listings accurate as inventory changes
+- **Real-time inventory sync** — Webhook-driven updates keep eBay listings accurate as inventory changes
 - **Business policy automation** — eBay listings get shipping, payment, and return policies assigned automatically (solves the Marketplace Connect gap)
 
 ## Supported Marketplaces
@@ -79,7 +79,7 @@ Press `p` in the terminal to open the app URL in your browser.
 
 ## Project Structure
 
-```
+```text
 app/
   components/                       # Shared UI components
     StatCard.tsx                     #   Reusable stat display card
@@ -110,7 +110,7 @@ prisma/
 
 ## Data Model
 
-```
+```text
 MarketplaceAccount ──┐
   shopId              │  1:many
   marketplace         ├──────── MarketplaceListing
@@ -137,6 +137,9 @@ npm run build
 
 # Deploy to Fly.io
 fly deploy
+
+# Local db proxy
+fly proxy 15432:5432 -a correct-name
 ```
 
 ### Environment Variables

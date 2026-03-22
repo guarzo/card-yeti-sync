@@ -28,7 +28,7 @@ docs/PRD.md                Product requirements document
 
 **Infrastructure completed:**
 - Deployed to Fly.io at `card-yeti-sync.fly.dev`
-- PostgreSQL database provisioned on Fly (`card-yet-sync-db`)
+- PostgreSQL database provisioned on Fly (`card-yeti-sync-db`)
 - Prisma migrated from SQLite to PostgreSQL
 - eBay sandbox developer app configured (RuName: `Thomas_Gamble-ThomasGa-pkmgra-legxmmb`)
 - Environment secrets set on Fly (Shopify, eBay, DATABASE_URL)

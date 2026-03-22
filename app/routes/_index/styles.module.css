@@ -17,6 +17,11 @@
   color: #1a2744;
 }
 
+.logoHeading {
+  margin: 0;
+  line-height: 0;
+}
+
 .logo {
   max-width: 320px;
   width: 100%;
@@ -94,6 +99,11 @@
 
 .button:active {
   background: #0f1a2e;
+}
+
+.button:focus-visible {
+  outline: 2px solid #3a7ab5;
+  outline-offset: 2px;
 }
 
 .list {

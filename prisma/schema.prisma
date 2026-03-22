@@ -65,6 +65,18 @@ model MarketplaceListing {
   @@index([shopId, marketplace, status])
 }
 
+// Short-lived OAuth nonces for CSRF/replay protection
+model OAuthNonce {
+  id        String   @id @default(cuid())
+  shopId    String
+  nonce     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([shopId])
+  @@index([expiresAt])
+}
+
 // Audit trail for all sync operations
 model SyncLog {
   id          String   @id @default(cuid())

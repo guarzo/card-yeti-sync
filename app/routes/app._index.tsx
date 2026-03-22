@@ -102,10 +102,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   // Parse GraphQL response
   const data = await graphqlResponse.json();
-  const products: Product[] = data.data?.products?.nodes ?? [];
-  const productCount: number = data.data?.productsCount?.count ?? 0;
+  if (!graphqlResponse.ok || (data as { errors?: unknown }).errors || !data.data) {
+    throw new Response("Failed to load products from Shopify", { status: 502 });
+  }
+  const products: Product[] = data.data.products?.nodes ?? [];
+  const productCount: number = data.data.productsCount?.count ?? 0;
   const activeProductCount: number =
-    data.data?.activeProductsCount?.count ?? 0;
+    data.data.activeProductsCount?.count ?? 0;
 
   // Phase 2: Fetch per-product listings (depends on productIds from GraphQL)
   const productIds = products.map((p) => p.id);
