@@ -1,14 +1,21 @@
+import crypto from "crypto";
+import { useEffect } from "react";
 import type {
   HeadersFunction,
   LoaderFunctionArgs,
   ActionFunctionArgs,
+  MetaFunction,
 } from "react-router";
-import { useLoaderData, useSearchParams, Form } from "react-router";
+import { useLoaderData, useSearchParams, useRouteError } from "react-router";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { getAuthorizationUrl } from "../lib/ebay-client.server";
 import db from "../db.server";
-import { daysUntil, relativeTime } from "../lib/ui-helpers";
+import { daysUntil } from "../lib/ui-helpers";
+import { ConnectionCard } from "../components/ConnectionCard";
+import { StatCard } from "../components/StatCard";
+import { RelativeTime } from "../components/RelativeTime";
+import { DisconnectButton } from "../components/DisconnectButton";
 
 interface ErrorListing {
   id: string;
@@ -24,33 +31,37 @@ interface LoaderData {
   listingCount: number;
   errorCount: number;
   pendingCount: number;
-  delistedCount: number;
   recentErrors: ErrorListing[];
+  productTitles: Record<string, string>;
 }
 
+export const meta: MetaFunction = () => [{ title: "eBay | Card Yeti Sync" }];
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const shop = session.shop;
 
   const account = await db.marketplaceAccount.findUnique({
     where: { shopId_marketplace: { shopId: shop, marketplace: "ebay" } },
   });
 
-  const [listingCount, errorCount, pendingCount, delistedCount] =
-    await Promise.all([
-      db.marketplaceListing.count({
-        where: { shopId: shop, marketplace: "ebay", status: "active" },
-      }),
-      db.marketplaceListing.count({
-        where: { shopId: shop, marketplace: "ebay", status: "error" },
-      }),
-      db.marketplaceListing.count({
-        where: { shopId: shop, marketplace: "ebay", status: "pending" },
-      }),
-      db.marketplaceListing.count({
-        where: { shopId: shop, marketplace: "ebay", status: "delisted" },
-      }),
-    ]);
+  const statusCounts = await db.marketplaceListing.groupBy({
+    by: ["status"],
+    where: {
+      shopId: shop,
+      marketplace: "ebay",
+      status: { in: ["active", "error", "pending"] },
+    },
+    _count: { id: true },
+  });
+  let listingCount = 0,
+    errorCount = 0,
+    pendingCount = 0;
+  for (const row of statusCounts) {
+    if (row.status === "active") listingCount = row._count.id;
+    else if (row.status === "error") errorCount = row._count.id;
+    else if (row.status === "pending") pendingCount = row._count.id;
+  }
 
   const recentErrors = await db.marketplaceListing.findMany({
     where: { shopId: shop, marketplace: "ebay", status: "error" },
@@ -64,8 +75,42 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
-  // Generate OAuth URL with shop as state for CSRF check
-  const state = Buffer.from(shop).toString("base64url");
+  // Look up product titles for error display
+  const productTitles: Record<string, string> = {};
+  if (recentErrors.length > 0) {
+    const ids = recentErrors
+      .map((e) => e.shopifyProductId)
+      .filter((id) => id.startsWith("gid://"));
+    if (ids.length > 0) {
+      const titleResponse = await admin.graphql(
+        `#graphql
+        query getProductTitles($ids: [ID!]!) {
+          nodes(ids: $ids) {
+            ... on Product {
+              id
+              title
+            }
+          }
+        }`,
+        { variables: { ids } },
+      );
+      const titleData = await titleResponse.json();
+      for (const node of titleData.data?.nodes ?? []) {
+        if (node?.id && node?.title) {
+          productTitles[node.id] = node.title;
+        }
+      }
+    }
+  }
+
+  // Generate HMAC-signed OAuth state for CSRF protection
+  const hmac = crypto
+    .createHmac("sha256", process.env.SHOPIFY_API_SECRET!)
+    .update(shop)
+    .digest("base64url");
+  const state = Buffer.from(JSON.stringify({ shop, hmac })).toString(
+    "base64url",
+  );
   const authUrl = getAuthorizationUrl(state);
 
   return {
@@ -73,13 +118,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     listingCount,
     errorCount,
     pendingCount,
-    delistedCount,
     authUrl,
     tokenExpiry: account?.tokenExpiry?.toISOString() ?? null,
     recentErrors: recentErrors.map((e) => ({
       ...e,
       updatedAt: e.updatedAt.toISOString(),
     })),
+    productTitles,
   } satisfies LoaderData;
 };
 
@@ -90,9 +135,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const intent = formData.get("intent");
 
   if (intent === "disconnect") {
-    await db.marketplaceAccount.delete({
-      where: { shopId_marketplace: { shopId: shop, marketplace: "ebay" } },
-    });
+    await db.$transaction([
+      db.marketplaceListing.deleteMany({
+        where: { shopId: shop, marketplace: "ebay" },
+      }),
+      db.marketplaceAccount.delete({
+        where: { shopId_marketplace: { shopId: shop, marketplace: "ebay" } },
+      }),
+    ]);
     return { disconnected: true };
   }
 
@@ -105,16 +155,26 @@ export default function EbaySettings() {
     listingCount,
     errorCount,
     pendingCount,
-    delistedCount,
     authUrl,
     tokenExpiry,
     recentErrors,
+    productTitles,
   } = useLoaderData<typeof loader>();
   const [searchParams] = useSearchParams();
   const success = searchParams.get("success");
   const error = searchParams.get("error");
 
   const tokenDays = tokenExpiry ? daysUntil(tokenExpiry) : null;
+
+  // Clean up URL params after reading
+  useEffect(() => {
+    if (success || error) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("success");
+      url.searchParams.delete("error");
+      window.history.replaceState({}, "", url.pathname);
+    }
+  }, [success, error]);
 
   return (
     <s-page heading="eBay">
@@ -131,79 +191,54 @@ export default function EbaySettings() {
 
       {/* Connection */}
       <s-section heading="Connection">
-        {connected ? (
-          <s-box padding="base" borderWidth="base" borderRadius="base">
-            <s-stack direction="block" gap="base">
-              <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
-                <s-stack direction="inline" gap="small" alignItems="center">
-                  <s-icon type="check-circle-filled" tone="success" />
-                  <s-text type="strong">eBay account connected</s-text>
-                </s-stack>
-                <Form method="post">
-                  <input type="hidden" name="intent" value="disconnect" />
-                  <s-button variant="tertiary" tone="critical" type="submit">
-                    Disconnect
-                  </s-button>
-                </Form>
-              </s-stack>
-
-              <s-divider />
-
-              <s-grid gap="base">
-                <s-grid-item>
-                  <s-stack direction="block" gap="small">
-                    <s-text color="subdued">Active Listings</s-text>
-                    <s-text type="strong">{listingCount}</s-text>
-                  </s-stack>
-                </s-grid-item>
-                <s-grid-item>
-                  <s-stack direction="block" gap="small">
-                    <s-text color="subdued">Pending</s-text>
-                    <s-text type="strong">{pendingCount}</s-text>
-                  </s-stack>
-                </s-grid-item>
-                <s-grid-item>
-                  <s-stack direction="block" gap="small">
-                    <s-text color="subdued">Errors</s-text>
-                    {errorCount > 0 ? (
-                      <s-badge tone="critical">{errorCount}</s-badge>
-                    ) : (
-                      <s-text type="strong">0</s-text>
+        <ConnectionCard
+          marketplace="eBay"
+          connected={connected}
+          icon="connect"
+          connectDescription="Link your eBay account to automatically create and manage listings. Card Yeti will use your business policies and map all card metafields to eBay item specifics."
+          connectAction={
+            <a href={authUrl} target="_top">
+              <s-button variant="primary">Connect eBay Account</s-button>
+            </a>
+          }
+          disconnectAction={<DisconnectButton marketplace="eBay" />}
+        >
+          <s-grid gap="base">
+            <s-grid-item>
+              <StatCard label="Active Listings" value={listingCount} />
+            </s-grid-item>
+            <s-grid-item>
+              <StatCard label="Pending" value={pendingCount} />
+            </s-grid-item>
+            <s-grid-item>
+              <StatCard
+                label="Errors"
+                value={
+                  errorCount > 0 ? (
+                    <s-badge tone="critical">{errorCount}</s-badge>
+                  ) : (
+                    "0"
+                  )
+                }
+              />
+            </s-grid-item>
+            <s-grid-item>
+              <StatCard
+                label="Token Expires"
+                value={
+                  <s-stack direction="inline" gap="small" alignItems="center">
+                    <span>
+                      {tokenDays !== null ? `${tokenDays} days` : "Unknown"}
+                    </span>
+                    {tokenDays !== null && tokenDays <= 7 && (
+                      <s-badge tone="warning">Renew soon</s-badge>
                     )}
                   </s-stack>
-                </s-grid-item>
-                <s-grid-item>
-                  <s-stack direction="block" gap="small">
-                    <s-text color="subdued">Token Expires</s-text>
-                    <s-stack direction="inline" gap="small" alignItems="center">
-                      <s-text type="strong">
-                        {tokenDays !== null ? `${tokenDays} days` : "Unknown"}
-                      </s-text>
-                      {tokenDays !== null && tokenDays <= 7 && (
-                        <s-badge tone="warning">Renew soon</s-badge>
-                      )}
-                    </s-stack>
-                  </s-stack>
-                </s-grid-item>
-              </s-grid>
-            </s-stack>
-          </s-box>
-        ) : (
-          <s-box padding="large" borderWidth="base" borderRadius="base">
-            <s-stack direction="block" gap="base" alignItems="center">
-              <s-icon type="connect" color="subdued" />
-              <s-text type="strong">Connect your eBay seller account</s-text>
-              <s-paragraph color="subdued">
-                Link your eBay account to automatically create and manage
-                listings. Card Yeti will use your business policies and map all
-                card metafields to eBay item specifics.
-              </s-paragraph>
-              <a href={authUrl} target="_top">
-                <s-button variant="primary">Connect eBay Account</s-button>
-              </a>
-            </s-stack>
-          </s-box>
-        )}
+                }
+              />
+            </s-grid-item>
+          </s-grid>
+        </ConnectionCard>
       </s-section>
 
       {/* Listing Errors */}
@@ -224,7 +259,8 @@ export default function EbaySettings() {
                 <s-table-row key={listing.id}>
                   <s-table-cell>
                     <s-text type="strong">
-                      {listing.shopifyProductId.split("/").pop()}
+                      {productTitles[listing.shopifyProductId] ??
+                        listing.shopifyProductId.split("/").pop()}
                     </s-text>
                   </s-table-cell>
                   <s-table-cell>
@@ -233,9 +269,7 @@ export default function EbaySettings() {
                     </s-text>
                   </s-table-cell>
                   <s-table-cell>
-                    <s-text color="subdued">
-                      {relativeTime(listing.updatedAt)}
-                    </s-text>
+                    <RelativeTime date={listing.updatedAt} />
                   </s-table-cell>
                 </s-table-row>
               ))}
@@ -251,7 +285,12 @@ export default function EbaySettings() {
         </s-paragraph>
         <s-stack direction="block" gap="base">
           <s-box padding="base" borderWidth="base" borderRadius="base">
-            <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
+            <s-stack
+              direction="inline"
+              gap="base"
+              alignItems="center"
+              justifyContent="space-between"
+            >
               <s-stack direction="inline" gap="base" alignItems="center">
                 <s-icon type="delivery" tone="info" />
                 <s-stack direction="block" gap="small">
@@ -268,7 +307,12 @@ export default function EbaySettings() {
             </s-stack>
           </s-box>
           <s-box padding="base" borderWidth="base" borderRadius="base">
-            <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
+            <s-stack
+              direction="inline"
+              gap="base"
+              alignItems="center"
+              justifyContent="space-between"
+            >
               <s-stack direction="inline" gap="base" alignItems="center">
                 <s-icon type="credit-card" tone="info" />
                 <s-stack direction="block" gap="small">
@@ -284,7 +328,12 @@ export default function EbaySettings() {
             </s-stack>
           </s-box>
           <s-box padding="base" borderWidth="base" borderRadius="base">
-            <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
+            <s-stack
+              direction="inline"
+              gap="base"
+              alignItems="center"
+              justifyContent="space-between"
+            >
               <s-stack direction="inline" gap="base" alignItems="center">
                 <s-icon type="return" tone="info" />
                 <s-stack direction="block" gap="small">
@@ -305,7 +354,12 @@ export default function EbaySettings() {
       {/* Sync Settings */}
       <s-section heading="Sync Settings">
         <s-stack direction="block" gap="base">
-          <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
+          <s-stack
+            direction="inline"
+            gap="base"
+            alignItems="center"
+            justifyContent="space-between"
+          >
             <s-stack direction="block" gap="small">
               <s-text type="strong">Auto-sync new products</s-text>
               <s-text color="subdued">
@@ -317,7 +371,12 @@ export default function EbaySettings() {
 
           <s-divider />
 
-          <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
+          <s-stack
+            direction="inline"
+            gap="base"
+            alignItems="center"
+            justifyContent="space-between"
+          >
             <s-stack direction="block" gap="small">
               <s-text type="strong">Inventory sync</s-text>
               <s-text color="subdued">
@@ -329,7 +388,12 @@ export default function EbaySettings() {
 
           <s-divider />
 
-          <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
+          <s-stack
+            direction="inline"
+            gap="base"
+            alignItems="center"
+            justifyContent="space-between"
+          >
             <s-stack direction="block" gap="small">
               <s-text type="strong">Cross-channel delisting</s-text>
               <s-text color="subdued">
@@ -342,6 +406,10 @@ export default function EbaySettings() {
       </s-section>
     </s-page>
   );
+}
+
+export function ErrorBoundary() {
+  return boundary.error(useRouteError());
 }
 
 export const headers: HeadersFunction = (headersArgs) => {

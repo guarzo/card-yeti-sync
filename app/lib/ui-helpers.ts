@@ -28,8 +28,16 @@ export function formatAction(action: string): string {
   return map[action] ?? action;
 }
 
-export function actionIcon(action: string): string {
-  const map: Record<string, string> = {
+export type ActionIconType =
+  | "plus-circle"
+  | "minus-circle"
+  | "refresh"
+  | "arrows-out-horizontal"
+  | "cash-dollar"
+  | "circle";
+
+export function actionIcon(action: string): ActionIconType {
+  const map: Record<string, ActionIconType> = {
     list: "plus-circle",
     delist: "minus-circle",
     update: "refresh",

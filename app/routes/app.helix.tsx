@@ -1,8 +1,15 @@
-import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { useLoaderData } from "react-router";
+import type {
+  HeadersFunction,
+  LoaderFunctionArgs,
+  MetaFunction,
+} from "react-router";
+import { useLoaderData, useRouteError } from "react-router";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import db from "../db.server";
+import { fetchProductTypeCounts } from "../lib/graphql-queries.server";
+import { ConnectionCard } from "../components/ConnectionCard";
+import { StatCard } from "../components/StatCard";
 
 interface LoaderData {
   connected: boolean;
@@ -11,6 +18,8 @@ interface LoaderData {
   gradedCount: number;
   rawCount: number;
 }
+
+export const meta: MetaFunction = () => [{ title: "Helix | Card Yeti Sync" }];
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
@@ -26,33 +35,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     where: { shopId: shop, marketplace: "helix", status: "active" },
   });
 
-  // Fetch product type counts for inventory readiness
-  const response = await admin.graphql(
-    `#graphql
-      query getProductTypes {
-        products(first: 250, query: "status:active") {
-          nodes {
-            productType
-          }
-        }
-        productsCount(query: "status:active") {
-          count
-        }
-      }`,
-  );
-
-  const data = await response.json();
-  const products = data.data?.products?.nodes ?? [];
-  const totalProducts: number = data.data?.productsCount?.count ?? 0;
+  const { totalProducts, typeCounts } = await fetchProductTypeCounts(admin);
 
   let gradedCount = 0;
   let rawCount = 0;
-  for (const p of products) {
-    const type = (p.productType || "").toLowerCase();
-    if (type.includes("graded") || type.includes("slab")) {
-      gradedCount++;
-    } else if (type.includes("raw") || type.includes("single")) {
-      rawCount++;
+  for (const { type, count } of typeCounts) {
+    const lower = type.toLowerCase();
+    if (lower.includes("graded") || lower.includes("slab")) {
+      gradedCount += count;
+    } else if (lower.includes("raw") || lower.includes("single")) {
+      rawCount += count;
     }
   }
 
@@ -79,40 +71,26 @@ export default function HelixSettings() {
 
       {/* Connection */}
       <s-section heading="Connection">
-        {connected ? (
-          <s-box padding="base" borderWidth="base" borderRadius="base">
-            <s-stack direction="block" gap="base">
-              <s-stack direction="inline" gap="small" alignItems="center">
-                <s-icon type="check-circle-filled" tone="success" />
-                <s-text type="strong">Helix account connected</s-text>
-              </s-stack>
-              <s-divider />
-              <s-stack direction="inline" gap="base">
-                <s-stack direction="block" gap="small">
-                  <s-text color="subdued">Active Listings</s-text>
-                  <s-text type="strong">{listingCount}</s-text>
-                </s-stack>
-              </s-stack>
-            </s-stack>
-          </s-box>
-        ) : (
-          <s-box padding="large" borderWidth="base" borderRadius="base">
-            <s-stack direction="block" gap="base" alignItems="center">
-              <s-icon type="bolt" color="subdued" />
-              <s-text type="strong">Connect to Helix</s-text>
-              <s-paragraph color="subdued">
-                Link your Helix seller account to sync your Pokemon card
-                inventory with the lowest marketplace fees (4.9%).
-              </s-paragraph>
-              <s-button variant="primary" disabled>
-                Connect Helix Account
-              </s-button>
-              <s-paragraph color="subdued">
-                Available when Helix opens their Seller API.
-              </s-paragraph>
-            </s-stack>
-          </s-box>
-        )}
+        <ConnectionCard
+          marketplace="Helix"
+          connected={connected}
+          icon="bolt"
+          connectDescription="Link your Helix seller account to sync your Pokemon card inventory with the lowest marketplace fees (4.9%)."
+          connectAction={
+            <s-button variant="primary" disabled>
+              Connect Helix Account
+            </s-button>
+          }
+          connectFooter={
+            <s-paragraph color="subdued">
+              Available when Helix opens their Seller API.
+            </s-paragraph>
+          }
+        >
+          <s-stack direction="inline" gap="base">
+            <StatCard label="Active Listings" value={listingCount} />
+          </s-stack>
+        </ConnectionCard>
       </s-section>
 
       {/* Why Helix? */}
@@ -214,51 +192,35 @@ export default function HelixSettings() {
         </s-paragraph>
         <s-grid gap="base">
           <s-grid-item>
-            <s-box
-              padding="base"
-              borderWidth="base"
-              borderRadius="base"
+            <StatCard
+              label="Total Products"
+              value={totalProducts}
               background="subdued"
-            >
-              <s-stack direction="block" gap="small">
-                <s-text color="subdued">Total Products</s-text>
-                <s-text type="strong">{totalProducts}</s-text>
-              </s-stack>
-            </s-box>
+            />
           </s-grid-item>
           <s-grid-item>
-            <s-box
-              padding="base"
-              borderWidth="base"
-              borderRadius="base"
+            <StatCard
+              label="Graded Cards"
+              value={gradedCount}
+              description="Highest demand on Helix"
               background="subdued"
-            >
-              <s-stack direction="block" gap="small">
-                <s-text color="subdued">Graded Cards</s-text>
-                <s-text type="strong">{gradedCount}</s-text>
-                <s-paragraph color="subdued">
-                  Highest demand on Helix
-                </s-paragraph>
-              </s-stack>
-            </s-box>
+            />
           </s-grid-item>
           <s-grid-item>
-            <s-box
-              padding="base"
-              borderWidth="base"
-              borderRadius="base"
+            <StatCard
+              label="Raw Singles"
+              value={rawCount}
               background="subdued"
-            >
-              <s-stack direction="block" gap="small">
-                <s-text color="subdued">Raw Singles</s-text>
-                <s-text type="strong">{rawCount}</s-text>
-              </s-stack>
-            </s-box>
+            />
           </s-grid-item>
         </s-grid>
       </s-section>
     </s-page>
   );
+}
+
+export function ErrorBoundary() {
+  return boundary.error(useRouteError());
 }
 
 export const headers: HeadersFunction = (headersArgs) => {

@@ -1,19 +1,24 @@
-import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { useLoaderData } from "react-router";
+import type {
+  HeadersFunction,
+  LoaderFunctionArgs,
+  MetaFunction,
+} from "react-router";
+import { useLoaderData, useRouteError } from "react-router";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import db from "../db.server";
-
-interface ProductTypeCount {
-  type: string;
-  count: number;
-}
+import { fetchProductTypeCounts } from "../lib/graphql-queries.server";
+import { StatCard } from "../components/StatCard";
 
 interface LoaderData {
   lastExportDate: string | null;
   productCount: number;
-  productTypes: ProductTypeCount[];
+  productTypes: Array<{ type: string; count: number }>;
 }
+
+export const meta: MetaFunction = () => [
+  { title: "Whatnot | Card Yeti Sync" },
+];
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
@@ -24,34 +29,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     orderBy: { createdAt: "desc" },
   });
 
-  // Fetch product counts by type from Shopify
-  const response = await admin.graphql(
-    `#graphql
-      query getProductTypes {
-        products(first: 250, query: "status:active") {
-          nodes {
-            productType
-          }
-        }
-        productsCount(query: "status:active") {
-          count
-        }
-      }`,
-  );
-
-  const data = await response.json();
-  const products = data.data?.products?.nodes ?? [];
-  const productCount: number = data.data?.productsCount?.count ?? 0;
-
-  // Group by product type
-  const typeCounts: Record<string, number> = {};
-  for (const p of products) {
-    const type = p.productType || "Uncategorized";
-    typeCounts[type] = (typeCounts[type] ?? 0) + 1;
-  }
-  const productTypes = Object.entries(typeCounts)
-    .map(([type, count]) => ({ type, count }))
-    .sort((a, b) => b.count - a.count);
+  const { totalProducts: productCount, typeCounts: productTypes } =
+    await fetchProductTypeCounts(admin);
 
   return {
     lastExportDate: lastExport?.createdAt?.toISOString() ?? null,
@@ -63,8 +42,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 const SUPPORTED_TYPES = ["Graded Card", "Graded Slab"];
 
 export default function WhatnotSettings() {
-  const { lastExportDate, productCount, productTypes } =
-    useLoaderData<typeof loader>();
+  const { lastExportDate, productTypes } = useLoaderData<typeof loader>();
 
   const exportableCount = productTypes
     .filter((t) => SUPPORTED_TYPES.includes(t.type))
@@ -83,29 +61,24 @@ export default function WhatnotSettings() {
           <s-stack direction="block" gap="base">
             <s-grid gap="base">
               <s-grid-item>
-                <s-stack direction="block" gap="small">
-                  <s-text color="subdued">Exportable Products</s-text>
-                  <s-text type="strong">{exportableCount}</s-text>
-                  <s-paragraph color="subdued">
-                    Graded cards with inventory
-                  </s-paragraph>
-                </s-stack>
+                <StatCard
+                  label="Exportable Products"
+                  value={exportableCount}
+                  description="Graded cards with inventory"
+                />
               </s-grid-item>
               <s-grid-item>
-                <s-stack direction="block" gap="small">
-                  <s-text color="subdued">Last Export</s-text>
-                  <s-text type="strong">
-                    {lastExportDate
+                <StatCard
+                  label="Last Export"
+                  value={
+                    lastExportDate
                       ? new Date(lastExportDate).toLocaleDateString()
-                      : "Never"}
-                  </s-text>
-                </s-stack>
+                      : "Never"
+                  }
+                />
               </s-grid-item>
               <s-grid-item>
-                <s-stack direction="block" gap="small">
-                  <s-text color="subdued">Format</s-text>
-                  <s-text type="strong">Whatnot Seller Hub CSV</s-text>
-                </s-stack>
+                <StatCard label="Format" value="Whatnot Seller Hub CSV" />
               </s-grid-item>
             </s-grid>
 
@@ -128,7 +101,12 @@ export default function WhatnotSettings() {
           What your Whatnot CSV export will include for each product.
         </s-paragraph>
 
-        <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
+        <s-box
+          padding="base"
+          borderWidth="base"
+          borderRadius="base"
+          background="subdued"
+        >
           <s-stack direction="block" gap="base">
             <s-stack direction="block" gap="small">
               <s-text type="strong">Column Mapping</s-text>
@@ -192,7 +170,7 @@ export default function WhatnotSettings() {
                   Whatnot Seller API — Developer Preview
                 </s-text>
                 <s-paragraph color="subdued">
-                  Whatnot's API is currently in Developer Preview and not
+                  Whatnot&apos;s API is currently in Developer Preview and not
                   accepting new applicants. When access opens, Card Yeti will
                   support real-time sync directly through their GraphQL API.
                 </s-paragraph>
@@ -241,7 +219,9 @@ export default function WhatnotSettings() {
                 <s-stack direction="inline" gap="small" alignItems="center">
                   <s-icon
                     type="product"
-                    tone={SUPPORTED_TYPES.includes(type) ? "success" : undefined}
+                    tone={
+                      SUPPORTED_TYPES.includes(type) ? "success" : undefined
+                    }
                   />
                   <s-text type="strong">{type}</s-text>
                 </s-stack>
@@ -266,6 +246,10 @@ export default function WhatnotSettings() {
       </s-section>
     </s-page>
   );
+}
+
+export function ErrorBoundary() {
+  return boundary.error(useRouteError());
 }
 
 export const headers: HeadersFunction = (headersArgs) => {

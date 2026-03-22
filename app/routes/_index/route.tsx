@@ -1,9 +1,13 @@
-import type { LoaderFunctionArgs } from "react-router";
+import type { LoaderFunctionArgs, MetaFunction } from "react-router";
 import { redirect, Form, useLoaderData } from "react-router";
 
 import { login } from "../../shopify.server";
 
 import styles from "./styles.module.css";
+
+export const meta: MetaFunction = () => [
+  { title: "Card Yeti Sync — Multi-Marketplace Pokemon Card Sync" },
+];
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
@@ -21,7 +25,11 @@ export default function App() {
   return (
     <div className={styles.index}>
       <div className={styles.content}>
-        <h1 className={styles.heading}>Card Yeti Sync</h1>
+        <img
+          src="/card-yeti-logo.png"
+          alt="Card Yeti"
+          className={styles.logo}
+        />
         <p className={styles.text}>
           Sync your Shopify card inventory to eBay, Whatnot, and Helix from one
           dashboard.

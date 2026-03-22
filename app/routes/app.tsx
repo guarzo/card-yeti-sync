@@ -4,21 +4,10 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 
 import { authenticate } from "../shopify.server";
-import db from "../db.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
-
-  const accounts = await db.marketplaceAccount.findMany({
-    where: { shopId: shop },
-    select: { marketplace: true },
-  });
-
-  return {
-    apiKey: process.env.SHOPIFY_API_KEY || "",
-    connectedMarketplaces: accounts.map((a) => a.marketplace),
-  };
+  await authenticate.admin(request);
+  return { apiKey: process.env.SHOPIFY_API_KEY || "" };
 };
 
 export default function App() {

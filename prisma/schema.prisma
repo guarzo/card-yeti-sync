@@ -36,7 +36,7 @@ model MarketplaceAccount {
   accessToken  String
   refreshToken String?
   tokenExpiry  DateTime?
-  settings     String   @default("{}") // JSON: policy IDs, sync rules, pricing rules
+  settings     Json     @default("{}") // policy IDs, sync rules, pricing rules
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import type { LoaderFunctionArgs } from "react-router";
 import { redirect } from "react-router";
 import { exchangeCodeForTokens } from "../lib/ebay-client.server";
@@ -14,6 +15,36 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   if (error || !code) {
     console.error("eBay OAuth denied or missing code:", error);
+    return redirect("/app/ebay?error=oauth_denied");
+  }
+
+  // Validate HMAC-signed CSRF state parameter
+  const state = url.searchParams.get("state");
+  if (!state) {
+    console.error("eBay OAuth callback missing state parameter");
+    return redirect("/app/ebay?error=oauth_denied");
+  }
+
+  let stateShop: string;
+  let stateHmac: string;
+  try {
+    const parsed = JSON.parse(Buffer.from(state, "base64url").toString());
+    stateShop = parsed.shop;
+    stateHmac = parsed.hmac;
+  } catch {
+    console.error("eBay OAuth callback invalid state parameter");
+    return redirect("/app/ebay?error=oauth_denied");
+  }
+
+  const expectedHmac = crypto
+    .createHmac("sha256", process.env.SHOPIFY_API_SECRET!)
+    .update(stateShop)
+    .digest("base64url");
+
+  if (stateShop !== shop || stateHmac !== expectedHmac) {
+    console.error(
+      `eBay OAuth state validation failed: expected ${shop}, got ${stateShop}`,
+    );
     return redirect("/app/ebay?error=oauth_denied");
   }
 
