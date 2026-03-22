@@ -1,3 +1,8 @@
+export const SHOPIFY_CONFIG = {
+  label: "Shopify",
+  icon: "store",
+} as const;
+
 export const MARKETPLACE_CONFIG = {
   ebay: { label: "eBay", icon: "globe", href: "/app/ebay" },
   whatnot: { label: "Whatnot", icon: "cart", href: "/app/whatnot" },

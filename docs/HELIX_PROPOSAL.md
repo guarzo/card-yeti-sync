@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="../Logo-03.png" alt="Card Yeti" width="300" />
+  <img src="../public/card-yeti-logo.png" alt="Card Yeti" width="300" />
 </p>
 
 <h2 align="center">Shopify Integration Proposal for Helix</h2>
@@ -19,7 +19,6 @@
 ---
 
 **Date:** March 2026
-**Author:** Tyler (Card Yeti)
 
 ## The Idea
 
@@ -35,13 +34,17 @@ I run a Pokémon card shop on Shopify ([Card Yeti](https://cardyeti.com)) and I'
 
 | Component | Status | Description |
 |:----------|:-------|:------------|
-| **Shopify App** | In Development | Embedded admin app with marketplace sync dashboard |
+| **Shopify App** | Active | Embedded admin app with priority-driven sync dashboard — at-a-glance marketplace health, sync activity, per-product listing status across all channels, and price suggestion review workflow |
 | **eBay Integration** | Active | OAuth + Sell Inventory API with automatic policy assignment |
 | **Whatnot Export** | CSV Ready | Bulk upload file generation with rich card descriptions |
 | **19 Card Metafields** | Live in Production | Structured data per card across hundreds of products |
 | **Cross-Channel Delist** | In Development | Auto-remove from other channels when a card sells |
 
 The app uses an **adapter pattern** — each marketplace gets its own adapter behind a consistent interface. Adding Helix would follow the same pattern as the eBay adapter already in development.
+
+<p align="center">
+  <img src="dashboard.jpg" alt="Card Yeti Dashboard" width="800" />
+</p>
 
 ### Structured Card Data
 
@@ -411,10 +414,10 @@ Hands-free ongoing sync. Changes in Shopify reflect on Helix automatically.
 
 **Card Yeti adds:**
 - Inbound webhook handler
-- Price intelligence dashboard
+- Price review workflow — Helix pricing data feeds suggested price updates directly into the dashboard, where sellers review and approve before syncing across all channels
 
 **Result:**
-Full bidirectional sync. Helix becomes the pricing engine sellers use everywhere.
+Full bidirectional sync. Helix pricing data drives seller decisions across every marketplace — building Helix's brand as the pricing authority.
 
 </td>
 </tr>
@@ -432,7 +435,7 @@ Full bidirectional sync. Helix becomes the pricing engine sellers use everywhere
 
 - **Instant seller base** — Every Shopify Pokémon card seller is a potential Helix seller through one app install
 - **Rich structured data** — 19 parsed card fields per listing, ready for search, filtering, and analytics
-- **Pricing authority** — API consumers build Helix's brand as where prices are set, even across other channels
+- **Pricing authority** — Sellers see Helix price suggestions directly in their dashboard and approve them across all channels, building Helix's brand as where prices are set
 
 </td>
 <td width="50%" valign="top">
@@ -441,7 +444,7 @@ Full bidirectional sync. Helix becomes the pricing engine sellers use everywhere
 
 - **Zero-friction onboarding** — Install app, connect, sync. Live on Helix in minutes
 - **No double-sells** — Cross-channel delisting happens automatically
-- **Better pricing** — Helix market data informs pricing across all channels
+- **Better pricing** — Helix market data surfaces as price suggestions in the dashboard, reviewable and approvable before syncing to all channels
 - **Lower fees** — 4.9% vs 12.9% on eBay
 
 </td>
@@ -457,7 +460,7 @@ For anyone curious about the app side:
 - **Framework:** React Router v7 (Shopify's recommended), deploying on Fly.io
 - **Database:** Prisma + SQLite (dev) / PostgreSQL (prod) for multi-tenant data
 - **Architecture:** Adapter pattern — each marketplace implements a consistent interface for listing, delisting, and inventory updates
-- **Data model:** Already supports multi-marketplace accounts, listing state tracking, and sync audit logs
+- **Data model:** Supports multi-marketplace accounts, listing state tracking, sync audit logs, and a price suggestion review pipeline for approving pricing changes before they propagate
 - **Field mappings:** 1:1 from existing Shopify metafield definitions — battle-tested across hundreds of live products
 - **eBay integration:** OAuth + Sell API actively in development, proving the adapter pattern
 

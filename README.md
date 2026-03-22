@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="Logo-03.png" alt="Card Yeti" width="400" />
+  <img src="public/card-yeti-logo.png" alt="Card Yeti" width="400" />
 </p>
 
 <p align="center">
@@ -16,6 +16,10 @@
 ---
 
 Card Yeti Sync is an embedded Shopify app that syncs your Pokémon card inventory across marketplaces from a single dashboard. eBay integration is live; Whatnot supports CSV export, and Helix integration is planned.
+
+<p align="center">
+  <img src="docs/dashboard.jpg" alt="Card Yeti Dashboard" width="800" />
+</p>
 
 ## Features
 

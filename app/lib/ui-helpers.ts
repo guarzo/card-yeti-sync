@@ -46,3 +46,15 @@ export function actionIcon(action: string): ActionIconType {
   };
   return map[action] ?? "circle";
 }
+
+export function actionTone(
+  action: string,
+): "success" | "critical" | "info" | "caution" | undefined {
+  const map: Record<string, "success" | "critical" | "info" | "caution"> = {
+    list: "success",
+    update: "info",
+    reconcile: "caution",
+    price_update: "info",
+  };
+  return map[action];
+}
