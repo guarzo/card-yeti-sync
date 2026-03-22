@@ -1,6 +1,6 @@
 # Implementation Plan
 
-Detailed breakdown of remaining work for Card Yeti Sync. Phase 1 (scaffold, Prisma schema, Helix proposal, dashboard, webhook stubs) is complete.
+Detailed breakdown of remaining work for Card Yeti Sync. Phase 1 (scaffold, Prisma schema, Helix proposal, dashboard, webhook stubs) is complete. Phase 2 is in progress.
 
 ---
 
@@ -9,29 +9,43 @@ Detailed breakdown of remaining work for Card Yeti Sync. Phase 1 (scaffold, Pris
 ```
 app/routes/
   app._index.tsx          Dashboard — product overview + per-marketplace sync count cards
-  app.ebay.tsx            eBay settings — placeholder UI (connect button, policy cards)
+  app.ebay.tsx            eBay settings — OAuth connect/disconnect, policy cards
   app.whatnot.tsx          Whatnot settings — placeholder UI (CSV export, API notice)
   app.helix.tsx            Helix settings — placeholder UI (connect button, feature list)
   app.tsx                  App shell — nav links to Dashboard, eBay, Whatnot, Helix
+  api.ebay-callback.tsx   eBay OAuth callback — exchanges code for tokens, stores in DB
   webhooks.*.tsx           Stub handlers — log topic + payload, TODO comments for each
 
-prisma/schema.prisma       Session, MarketplaceAccount, MarketplaceListing, SyncLog
+app/lib/
+  ebay-client.server.ts    eBay OAuth client — auth URL, token exchange, refresh, API calls
+
+prisma/schema.prisma       Session, MarketplaceAccount, MarketplaceListing, SyncLog (PostgreSQL)
 shopify.app.toml           Scopes + webhook subscriptions declared
+fly.toml                   Fly.io deployment config (card-yeti-sync.fly.dev)
 docs/HELIX_PROPOSAL.md    Integration proposal (ready to send)
 docs/PRD.md                Product requirements document
 ```
 
-**Not yet built:** `app/lib/` (adapters, mappers, clients, sync engine), functional webhook handlers, eBay OAuth flow, CSV export, admin block extension, reconciliation endpoint.
+**Infrastructure completed:**
+- Deployed to Fly.io at `card-yeti-sync.fly.dev`
+- PostgreSQL database provisioned on Fly (`card-yet-sync-db`)
+- Prisma migrated from SQLite to PostgreSQL
+- eBay sandbox developer app configured (RuName: `Thomas_Gamble-ThomasGa-pkmgra-legxmmb`)
+- Environment secrets set on Fly (Shopify, eBay, DATABASE_URL)
+
+**Not yet built:** adapters, mappers, sync engine, functional webhook handlers, business policy management, CSV export, admin block extension, reconciliation endpoint.
 
 ---
 
 ## Phase 2: eBay Direct Integration
 
-### 2.1 eBay OAuth Client
+### 2.1 eBay OAuth Client ✅
 
 **File:** `app/lib/ebay-client.server.ts`
 
 Handles the full OAuth authorization code grant lifecycle for eBay Sell APIs. Ported from the pattern in `yeti-shop/scripts/helpers/ebay-client.js` (which only does client_credentials for Browse API).
+
+**Status:** Complete. Implements `getAuthorizationUrl()`, `exchangeCodeForTokens()`, `refreshAccessToken()`, and `ebayApiCall()` with reactive 401 refresh. Supports sandbox/production via `EBAY_ENVIRONMENT` env var.
 
 **Functions to implement:**
 
@@ -65,11 +79,13 @@ ebayApiCall(method, url, body, account: MarketplaceAccount): Promise<Response>
 - Auth header for token exchange: `Basic base64(clientId:clientSecret)`
 - Use reactive refresh (retry on 401) rather than preemptive timer
 
-### 2.2 eBay OAuth Routes
+### 2.2 eBay OAuth Routes ✅
 
 **File:** `app/routes/api.ebay-callback.tsx`
 
 Callback route for eBay OAuth. Receives the authorization code after seller consent.
+
+**Status:** Complete. Callback route exchanges code for tokens and upserts into `MarketplaceAccount`. eBay settings page (`app.ebay.tsx`) updated with working connect/disconnect flow. Uses `target="_top"` to break out of Shopify iframe for OAuth redirect.
 
 ```
 Flow:
