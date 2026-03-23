@@ -5,7 +5,7 @@ import type {
   LoaderFunctionArgs,
   MetaFunction,
 } from "react-router";
-import { useActionData, useFetcher, useLoaderData, useRouteError } from "react-router";
+import { useFetcher, useLoaderData, useRouteError } from "react-router";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import db from "../db.server";
@@ -209,7 +209,6 @@ export default function HelixSettings() {
     lastFetchDate,
   } = useLoaderData<typeof loader>();
 
-  const actionData = useActionData<typeof action>();
   const fetchPricesFetcher = useFetcher();
   const isFetching = fetchPricesFetcher.state === "submitting";
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
