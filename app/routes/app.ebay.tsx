@@ -18,6 +18,8 @@ import { StatCard } from "../components/StatCard";
 import { RelativeTime } from "../components/RelativeTime";
 import { DisconnectButton } from "../components/DisconnectButton";
 import { getAccountSettings } from "../lib/account-settings.server";
+import { getInventoryItem, getOffersForSku } from "../lib/adapters/ebay.server";
+import { getAllProducts } from "../lib/shopify-helpers.server";
 import { reconcileShop } from "../lib/sync-engine.server";
 
 interface ErrorListing {
@@ -313,6 +315,76 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       success: true,
       message: `Reconciled: ${result.delisted} delisted, ${result.relisted} relisted, ${result.errors} errors`,
       ...result,
+    });
+  }
+
+  if (intent === "import-listings") {
+    const account = await db.marketplaceAccount.findFirst({
+      where: { shopId: session.shop, marketplace: "ebay" },
+    });
+    if (!account) return Response.json({ error: "Not connected" }, { status: 400 });
+
+    const products = await getAllProducts(admin, { query: "status:active" });
+    const results = { imported: 0, skipped: 0, notFound: [] as string[] };
+
+    for (const p of products) {
+      if (!p.variant) continue;
+
+      const productId = p.product.id as string;
+      const sku = (p.variant.sku as string) || `CY-${productId.split("/").pop()}`;
+
+      const existing = await db.marketplaceListing.findUnique({
+        where: {
+          shopId_shopifyProductId_marketplace: {
+            shopId: session.shop,
+            shopifyProductId: productId,
+            marketplace: "ebay",
+          },
+        },
+      });
+      if (existing) {
+        results.skipped++;
+        continue;
+      }
+
+      const item = await getInventoryItem(sku, account);
+      if (!item) {
+        results.notFound.push(`${p.product.title} (SKU: ${sku})`);
+        continue;
+      }
+
+      const offer = await getOffersForSku(sku, account);
+
+      await db.marketplaceListing.create({
+        data: {
+          shopId: session.shop,
+          shopifyProductId: productId,
+          marketplace: "ebay",
+          marketplaceId: offer?.listingId ?? "",
+          offerId: offer?.offerId ?? "",
+          status: "active",
+          lastSyncedAt: new Date(),
+        },
+      });
+      results.imported++;
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    await db.syncLog.create({
+      data: {
+        shopId: session.shop,
+        marketplace: "ebay",
+        action: "import",
+        status: "success",
+        details: JSON.stringify(results),
+      },
+    });
+
+    return Response.json({
+      success: true,
+      message: `Imported ${results.imported} listings. ${results.skipped} already tracked. ${results.notFound.length} not found on eBay.`,
+      ...results,
     });
   }
 
@@ -667,6 +739,24 @@ export default function EbaySettings() {
               <Form method="post">
                 <input type="hidden" name="intent" value="reconcile" />
                 <s-button type="submit">Reconcile Now</s-button>
+              </Form>
+            </s-stack>
+          )}
+
+          {connected && <s-divider />}
+
+          {connected && (
+            <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
+              <s-stack direction="block" gap="small">
+                <s-text type="strong">Import existing listings</s-text>
+                <s-text color="subdued">
+                  Scan eBay for listings matching your Shopify product SKUs and import
+                  them into Card Yeti for tracking. Safe to run multiple times.
+                </s-text>
+              </s-stack>
+              <Form method="post">
+                <input type="hidden" name="intent" value="import-listings" />
+                <s-button type="submit">Import from eBay</s-button>
               </Form>
             </s-stack>
           )}

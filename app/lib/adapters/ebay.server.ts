@@ -251,3 +251,49 @@ export async function bulkUpdatePriceQuantity(
     errorCount: errors.length,
   };
 }
+
+/**
+ * Check if an inventory item exists on eBay for the given SKU.
+ * Returns null if not found (404).
+ */
+export async function getInventoryItem(
+  sku: string,
+  account: MarketplaceAccount,
+): Promise<{ sku: string; exists: boolean } | null> {
+  const { response } = await ebayApiCall(
+    "GET",
+    `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
+    null,
+    account,
+  );
+
+  if (response.ok) return { sku, exists: true };
+  if (response.status === 404) return null;
+  return null;
+}
+
+/**
+ * Get offers for a SKU. Returns the first offer's ID and listing ID if found.
+ */
+export async function getOffersForSku(
+  sku: string,
+  account: MarketplaceAccount,
+): Promise<{ offerId: string; listingId: string } | null> {
+  const { response } = await ebayApiCall(
+    "GET",
+    `/sell/inventory/v1/offer?sku=${encodeURIComponent(sku)}&limit=1`,
+    null,
+    account,
+  );
+
+  if (!response.ok) return null;
+
+  const data = await response.json();
+  const offer = data.offers?.[0];
+  if (!offer) return null;
+
+  return {
+    offerId: offer.offerId ?? "",
+    listingId: offer.listing?.listingId ?? "",
+  };
+}
