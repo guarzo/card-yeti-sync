@@ -2,6 +2,7 @@ import type { MarketplaceAccount } from "@prisma/client";
 
 import db from "../db.server";
 import * as ebayAdapter from "./adapters/ebay.server";
+import { isShadowMode } from "./shadow-mode.server";
 import type { CardMetafields } from "./shopify-helpers.server";
 
 type SyncResult = {
@@ -137,6 +138,7 @@ export async function createEbayListing(
   account: MarketplaceAccount,
 ): Promise<void> {
   const result = await ebayAdapter.listProduct(product, variant, metafields, images, account);
+  const listingStatus = isShadowMode() ? "pending" : result.status;
 
   await db.marketplaceListing.upsert({
     where: {
@@ -152,14 +154,14 @@ export async function createEbayListing(
       marketplace: "ebay",
       marketplaceId: result.marketplaceId,
       offerId: result.offerId,
-      status: result.status,
+      status: listingStatus,
       errorMessage: result.error ?? null,
       lastSyncedAt: new Date(),
     },
     update: {
       marketplaceId: result.marketplaceId,
       offerId: result.offerId,
-      status: result.status,
+      status: listingStatus,
       errorMessage: result.error ?? null,
       lastSyncedAt: new Date(),
     },
@@ -171,7 +173,7 @@ export async function createEbayListing(
       marketplace: "ebay",
       action: "list",
       productId: productGid,
-      status: result.status === "active" ? "success" : "error",
+      status: listingStatus === "active" ? "success" : "error",
       details: JSON.stringify({ title: product.title, error: result.error }),
     },
   });
