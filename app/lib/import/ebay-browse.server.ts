@@ -7,7 +7,7 @@
 import { getEbayBrowseItem } from "../ebay-client.server";
 import type { EbayBrowseItem } from "../ebay-client.server";
 import { parseGraderFromTitle } from "./csv-parser.server";
-import { sleep } from "./product-builder.server";
+import { sleep } from "../timing";
 import type { ParsedCard } from "./types";
 
 const BROWSE_API_DELAY_MS = 200;

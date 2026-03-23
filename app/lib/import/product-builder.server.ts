@@ -7,6 +7,7 @@
 
 import type { ParsedCard, ImportResult } from "./types";
 import type { AdminClient } from "../../types/admin";
+import { sleep } from "../timing";
 
 export interface StoreData {
   collectionMap: Record<string, string>;
@@ -148,9 +149,7 @@ const TAGS_REMOVE_MUTATION = `#graphql
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-export function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+export { sleep } from "../timing";
 
 export function slugify(text: string): string {
   return text
@@ -505,17 +504,26 @@ export async function removeNewArrivalTags(
   let hasNextPage = true;
 
   while (hasNextPage) {
-    const res = await admin.graphql(PRODUCTS_BY_TAG_QUERY, {
-      variables: { first: 50, after, query: "tag:new-arrival" },
-    });
-    const data = await res.json();
+    try {
+      const res = await admin.graphql(PRODUCTS_BY_TAG_QUERY, {
+        variables: { first: 50, after, query: "tag:new-arrival" },
+      });
+      const data = await res.json();
 
-    for (const edge of data.data.products.edges) {
-      products.push(edge.node);
+      const edges = data.data?.products?.edges ?? [];
+      for (const edge of edges) {
+        products.push(edge.node);
+      }
+
+      hasNextPage = data.data?.products?.pageInfo?.hasNextPage ?? false;
+      after = data.data?.products?.pageInfo?.endCursor ?? null;
+    } catch (err) {
+      console.error(
+        "Failed to fetch new-arrival products page:",
+        err instanceof Error ? err.message : err,
+      );
+      break;
     }
-
-    hasNextPage = data.data.products.pageInfo.hasNextPage;
-    after = data.data.products.pageInfo.endCursor;
   }
 
   if (products.length === 0) return 0;

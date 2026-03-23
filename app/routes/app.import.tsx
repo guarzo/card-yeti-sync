@@ -16,9 +16,9 @@ import {
   fetchStoreData,
   createProduct,
   removeNewArrivalTags,
-  sleep,
   DELAY_MS,
 } from "../lib/import/product-builder.server";
+import { sleep } from "../lib/timing";
 import { ImportReviewTable } from "../components/import/ImportReviewTable";
 import type {
   ParsedCard,

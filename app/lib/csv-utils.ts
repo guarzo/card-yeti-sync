@@ -21,9 +21,6 @@ export function escapeCSVField(value: string, options?: EscapeOptions): string {
 }
 
 /**
- * Generate a CSV string from headers and rows of unescaped field strings.
- */
-/**
  * Parse a CSV string into rows of fields (RFC 4180 compliant).
  * Handles quoted fields with escaped double-quotes.
  */
@@ -70,6 +67,9 @@ export function parseCSV(text: string): string[][] {
   return rows;
 }
 
+/**
+ * Generate a CSV string from headers and rows of unescaped field strings.
+ */
 export function generateCSV(
   headers: readonly string[],
   rows: string[][],

@@ -58,16 +58,30 @@ export async function fetchAndCreatePriceSuggestions(
   const certNumbers = Array.from(certMap.keys());
   const batchResponse = await fetchPriceBatch(certNumbers);
 
-  // 5. Determine discount rate
-  const account = await db.marketplaceAccount.findFirst({
-    where: { shopId: shop },
+  // 5. Determine discount rate from the Helix account
+  const account = await db.marketplaceAccount.findUnique({
+    where: { shopId_marketplace: { shopId: shop, marketplace: "helix" } },
   });
   const discountPercent = account
     ? getAccountSettings(account).discountPercent
     : 5;
   const discount = discountPercent / 100;
 
-  // 6. Upsert PriceSuggestion records
+  // 6. Batch-fetch existing pending suggestions to avoid N+1 queries
+  const productIdsFromCertMap = [
+    ...new Set(Array.from(certMap.values()).map((v) => v.shopifyProductId)),
+  ];
+  const existingSuggestions = await db.priceSuggestion.findMany({
+    where: {
+      shopId: shop,
+      shopifyProductId: { in: productIdsFromCertMap },
+      status: "pending",
+    },
+  });
+  const existingByProductId = new Map(
+    existingSuggestions.map((s) => [s.shopifyProductId, s]),
+  );
+
   let created = 0;
   let updated = 0;
   let skipped = 0;
@@ -83,14 +97,7 @@ export async function fetchAndCreatePriceSuggestions(
       (result.suggestedPrice * (1 - discount)).toFixed(2),
     );
 
-    // Check for existing pending suggestion for this product
-    const existing = await db.priceSuggestion.findFirst({
-      where: {
-        shopId: shop,
-        shopifyProductId: productInfo.shopifyProductId,
-        status: "pending",
-      },
-    });
+    const existing = existingByProductId.get(productInfo.shopifyProductId);
 
     if (existing) {
       await db.priceSuggestion.update({

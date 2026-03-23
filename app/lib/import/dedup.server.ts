@@ -7,7 +7,8 @@
 
 import type { ParsedCard } from "./types";
 import type { AdminClient } from "../../types/admin";
-import { buildTitle, slugify, sleep } from "./product-builder.server";
+import { buildTitle, slugify } from "./product-builder.server";
+import { sleep } from "../timing";
 
 const BATCH_SIZE = 20;
 const BATCH_DELAY_MS = 200;

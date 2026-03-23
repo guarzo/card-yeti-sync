@@ -8,7 +8,7 @@ import {
 } from "../mappers/ebay-mapper";
 import { isShadowMode, compareWithEbayState, logShadowAction } from "../shadow-mode.server";
 import type { CardMetafields } from "../shopify-helpers.server";
-import { sleep } from "../import/product-builder.server";
+import { sleep } from "../timing";
 
 /**
  * Wrapper around ebayApiCall that persists refreshed tokens to the database.
@@ -22,13 +22,20 @@ async function ebayApiCallWithPersist(
 ): Promise<Response> {
   const { response, updatedTokens } = await ebayApiCall(method, path, body, account);
   if (updatedTokens) {
-    await db.marketplaceAccount.update({
-      where: { id: account.id },
-      data: {
-        accessToken: updatedTokens.accessToken,
-        tokenExpiry: updatedTokens.tokenExpiry,
-      },
-    });
+    try {
+      await db.marketplaceAccount.update({
+        where: { id: account.id },
+        data: {
+          accessToken: updatedTokens.accessToken,
+          tokenExpiry: updatedTokens.tokenExpiry,
+        },
+      });
+    } catch (err) {
+      console.error(
+        `Failed to persist refreshed eBay token for account ${account.id}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
   }
   return response;
 }
