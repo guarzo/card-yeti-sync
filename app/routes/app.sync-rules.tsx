@@ -29,14 +29,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const marketplace = formData.get("marketplace")?.toString();
   if (!marketplace) {
-    return Response.json({ error: "Missing marketplace" }, { status: 400 });
+    return Response.json({ error: "Missing marketplace", marketplace: "" }, { status: 400 });
   }
 
   const account = await db.marketplaceAccount.findUnique({
     where: { shopId_marketplace: { shopId: session.shop, marketplace } },
   });
   if (!account) {
-    return Response.json({ error: "Marketplace not connected" }, { status: 400 });
+    return Response.json({ error: "Marketplace not connected", marketplace }, { status: 400 });
   }
 
   const selectedTypes = formData.getAll("productTypes").map((v) => v.toString());
@@ -49,13 +49,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const priceMax = priceMaxRaw ? parseFloat(priceMaxRaw) : null;
 
   if (priceMin !== null && !Number.isFinite(priceMin)) {
-    return Response.json({ error: "Invalid minimum price" }, { status: 400 });
+    return Response.json({ error: "Invalid minimum price", marketplace }, { status: 400 });
   }
   if (priceMax !== null && !Number.isFinite(priceMax)) {
-    return Response.json({ error: "Invalid maximum price" }, { status: 400 });
+    return Response.json({ error: "Invalid maximum price", marketplace }, { status: 400 });
   }
   if (priceMin !== null && priceMax !== null && priceMin > priceMax) {
-    return Response.json({ error: "Minimum price must not exceed maximum price" }, { status: 400 });
+    return Response.json({ error: "Minimum price must not exceed maximum price", marketplace }, { status: 400 });
   }
 
   const syncRules: SyncRules = {
@@ -184,7 +184,7 @@ export default function SyncRulesPage() {
                     <s-text>Auto-sync new products</s-text>
                   </label>
 
-                  {actionData && "error" in actionData && (
+                  {actionData && "error" in actionData && (actionData as { marketplace: string }).marketplace === mp && (
                     <s-banner tone="critical">
                       {(actionData as { error: string }).error}
                     </s-banner>
