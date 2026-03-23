@@ -2,8 +2,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import { escapeCSVField } from "../lib/csv-utils";
 import db from "../db.server";
-
-const SHOPIFY_DISCOUNT = 0.05;
+import { getAccountSettings } from "../lib/account-settings.server";
 
 const PRODUCTS_QUERY = `
   query products($first: Int!, $after: String) {
@@ -161,6 +160,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
 
+  const account = await db.marketplaceAccount.findFirst({
+    where: { shopId: session.shop },
+  });
+  const discountPercent = account ? getAccountSettings(account).discountPercent : 5;
+  const shopifyDiscount = discountPercent / 100;
+
   const formData = await request.formData();
   const file = formData.get("file") as File | null;
   const dryRun = formData.get("dryRun") === "true";
@@ -222,7 +227,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     if (!current) continue;
 
     const newCompareAt = csvPrice;
-    const newPrice = (parseFloat(csvPrice) * (1 - SHOPIFY_DISCOUNT)).toFixed(2);
+    const newPrice = (parseFloat(csvPrice) * (1 - shopifyDiscount)).toFixed(2);
 
     if (newPrice !== current.price || newCompareAt !== current.compareAtPrice) {
       updates.push({ productId, variantId, title: title ?? productId, oldPrice: current.price, newPrice, newCompareAt });
