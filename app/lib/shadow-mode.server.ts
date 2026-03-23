@@ -3,8 +3,9 @@ import type { MarketplaceAccount } from "@prisma/client";
 import { ebayApiCall } from "./ebay-client.server";
 import db from "../db.server";
 
-export function isShadowMode(): boolean {
-  return process.env.EBAY_SHADOW_MODE === "true";
+export function isShadowMode(account: MarketplaceAccount): boolean {
+  const settings = (account.settings ?? {}) as Record<string, unknown>;
+  return settings.shadowMode === true;
 }
 
 interface ShadowComparison {

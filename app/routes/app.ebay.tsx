@@ -6,7 +6,7 @@ import type {
   ActionFunctionArgs,
   MetaFunction,
 } from "react-router";
-import { useLoaderData, useSearchParams, useRouteError } from "react-router";
+import { Form, useLoaderData, useSearchParams, useRouteError } from "react-router";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { getAuthorizationUrl } from "../lib/ebay-client.server";
@@ -139,7 +139,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const state = generateHmacState(shop, nonce);
   const authUrl = getAuthorizationUrl(state);
 
-  const shadowMode = process.env.EBAY_SHADOW_MODE === "true";
+  const accountSettings = (account?.settings ?? {}) as Record<string, unknown>;
+  const shadowMode = accountSettings.shadowMode === true;
 
   let shadowStats: ShadowStats = { total: 0, matches: 0, discrepancies: 0, recent: [] };
   if (shadowMode) {
@@ -248,6 +249,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
 
     return Response.json({ success: true });
+  }
+
+  if (intent === "toggle-shadow") {
+    const account = await db.marketplaceAccount.findFirst({
+      where: { shopId: session.shop, marketplace: "ebay" },
+    });
+    if (!account) return Response.json({ error: "Not connected" }, { status: 400 });
+
+    const currentSettings = (account.settings ?? {}) as Record<string, unknown>;
+    const newShadowMode = !(currentSettings.shadowMode === true);
+    await db.marketplaceAccount.update({
+      where: { id: account.id },
+      data: {
+        settings: { ...currentSettings, shadowMode: newShadowMode },
+      },
+    });
+
+    return Response.json({ success: true, shadowMode: newShadowMode });
   }
 
   return null;
@@ -524,6 +543,31 @@ export default function EbaySettings() {
       {/* Sync Settings */}
       <s-section heading="Sync Settings">
         <s-stack direction="block" gap="base">
+          {connected && (
+            <s-stack
+              direction="inline"
+              gap="base"
+              alignItems="center"
+              justifyContent="space-between"
+            >
+              <s-stack direction="block" gap="small">
+                <s-text type="strong">Shadow mode</s-text>
+                <s-text color="subdued">
+                  Log what Card Yeti would do without writing to eBay.
+                  Use while validating alongside Marketplace Connector.
+                </s-text>
+              </s-stack>
+              <Form method="post">
+                <input type="hidden" name="intent" value="toggle-shadow" />
+                <s-button variant={shadowMode ? "primary" : "tertiary"} type="submit">
+                  {shadowMode ? "Disable Shadow Mode" : "Enable Shadow Mode"}
+                </s-button>
+              </Form>
+            </s-stack>
+          )}
+
+          {connected && <s-divider />}
+
           <s-stack
             direction="inline"
             gap="base"

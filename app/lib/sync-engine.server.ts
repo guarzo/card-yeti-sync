@@ -138,7 +138,7 @@ export async function createEbayListing(
   account: MarketplaceAccount,
 ): Promise<void> {
   const result = await ebayAdapter.listProduct(product, variant, metafields, images, account);
-  const listingStatus = isShadowMode() ? "pending" : result.status;
+  const listingStatus = isShadowMode(account) ? "pending" : result.status;
 
   await db.marketplaceListing.upsert({
     where: {

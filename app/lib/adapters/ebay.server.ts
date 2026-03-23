@@ -39,7 +39,7 @@ export async function listProduct(
   const inventoryItem = mapToInventoryItem(product, metafields, images);
   const offer = mapToOffer(product, variant, metafields, policyIds);
 
-  if (isShadowMode()) {
+  if (isShadowMode(account)) {
     const comparison = await compareWithEbayState(sku, "list", {
       title: product.title,
       sku,
@@ -117,7 +117,7 @@ export async function updateProduct(
   images: string[],
   account: MarketplaceAccount,
 ): Promise<{ status: "active" | "error"; error?: string }> {
-  if (isShadowMode()) {
+  if (isShadowMode(account)) {
     const comparison = await compareWithEbayState(sku, "update", {
       title: product.title,
       sku,
@@ -169,7 +169,7 @@ export async function delistProduct(
   offerId: string,
   account: MarketplaceAccount,
 ): Promise<{ status: "delisted" | "error"; error?: string }> {
-  if (isShadowMode()) {
+  if (isShadowMode(account)) {
     await logShadowAction(account.shopId, undefined, "delist", {
       intended: "delist",
       intendedParams: { offerId },
@@ -200,7 +200,7 @@ export async function bulkUpdatePriceQuantity(
   updates: { offerId: string; sku: string; price?: string; quantity?: number }[],
   account: MarketplaceAccount,
 ): Promise<{ successCount: number; errorCount: number }> {
-  if (isShadowMode()) {
+  if (isShadowMode(account)) {
     console.log(`[SHADOW] Would bulk update ${updates.length} price/qty entries`);
     await db.syncLog.create({
       data: {
