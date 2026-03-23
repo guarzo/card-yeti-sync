@@ -49,9 +49,11 @@ export function BulkApproveModal({
     | undefined;
 
   // Reset selection when suggestions change (e.g., after inline approval)
-  useEffect(() => {
+  const [prevSuggestions, setPrevSuggestions] = useState(suggestions);
+  if (suggestions !== prevSuggestions) {
+    setPrevSuggestions(suggestions);
     setSelected(new Set(suggestions.map((s) => s.id)));
-  }, [suggestions]);
+  }
 
   // Close on full success
   useEffect(() => {

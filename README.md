@@ -71,6 +71,7 @@ Generates Helix-compatible CSVs with full card metadata (29 columns). Integratio
 ### Prerequisites
 
 - [Node.js](https://nodejs.org/) >= 20.19
+- [Docker](https://docs.docker.com/get-docker/) (for local PostgreSQL)
 - [Shopify CLI](https://shopify.dev/docs/apps/tools/cli)
 - A Shopify Partner account and dev store
 
@@ -80,7 +81,21 @@ Generates Helix-compatible CSVs with full card metadata (29 columns). Integratio
 # Install dependencies
 npm install
 
-# Set up the database
+# Copy environment template
+cp .env.example .env
+# Then fill in your eBay sandbox credentials in .env
+
+# Start local Postgres, run migrations, and launch Shopify dev server
+npm run dev:full
+```
+
+Or step by step:
+
+```bash
+# Start PostgreSQL
+docker compose up -d
+
+# Run database migrations
 npx prisma migrate dev
 
 # Start the dev server (opens in Shopify admin)
@@ -88,6 +103,8 @@ shopify app dev
 ```
 
 Press `p` in the terminal to open the app URL in your browser.
+
+> **Note:** The Fly.io database is production-only. Local development uses a Docker Compose PostgreSQL instance on port 15432.
 
 ## Project Structure
 
@@ -230,8 +247,9 @@ fly deploy
 # Deploy Shopify app config + extensions
 shopify app deploy
 
-# Local db proxy
-fly proxy 15432:5432 -a card-yeti-sync-db
+# Proxy prod DB for debugging (read-only recommended)
+fly proxy 25432:5432 -a card-yeti-sync-db
+# Then: DATABASE_URL="postgresql://...@localhost:25432/..." npx prisma studio
 ```
 
 ### Environment Variables
@@ -271,7 +289,7 @@ Set automatically by Shopify CLI during development. For production, configure v
 | `npm run lint` | ESLint |
 | `npm run setup` | Generate Prisma client + run migrations |
 | `npm run test` | Run Vitest tests |
-| `npm run dev:full` | Start Fly DB proxy + Shopify dev server |
+| `npm run dev:full` | Start local Postgres + migrations + Shopify dev server |
 
 ---
 

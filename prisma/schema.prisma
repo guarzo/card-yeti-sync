@@ -99,6 +99,8 @@ model PriceSuggestion {
   currentPrice     Decimal
   suggestedPrice   Decimal
   status           String    @default("pending") // "pending" | "approved" | "rejected"
+  source           String    @default("manual") // "api" | "manual"
+  certNumber       String?
   reason           String?
   reviewedAt       DateTime?
   createdAt        DateTime  @default(now())

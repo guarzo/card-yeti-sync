@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:15
+    ports:
+      - "15432:5432"
+    environment:
+      POSTGRES_USER: card_yeti_sync
+      POSTGRES_PASSWORD: card_yeti_sync
+      POSTGRES_DB: card_yeti_sync
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U card_yeti_sync"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pgdata:
