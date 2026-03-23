@@ -189,3 +189,71 @@ export type TokenUpdate = {
   tokenExpiry: Date;
 };
 
+// ── Browse API (client_credentials grant) ────────────────────────────────────
+
+let cachedAppToken: string | null = null;
+let appTokenExpiry = 0;
+
+async function getClientCredentialsToken(): Promise<string> {
+  if (cachedAppToken && Date.now() < appTokenExpiry) return cachedAppToken;
+
+  const endpoints = getEndpoints();
+  const res = await fetch(endpoints.token, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: `Basic ${getBasicAuth()}`,
+    },
+    body: "grant_type=client_credentials&scope=https://api.ebay.com/oauth/api_scope",
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`eBay OAuth (client_credentials) error: ${res.status} ${text}`);
+  }
+
+  const data = await res.json();
+  cachedAppToken = data.access_token;
+  // Expire 60s early to be safe
+  appTokenExpiry = Date.now() + (data.expires_in - 60) * 1000;
+  return cachedAppToken!;
+}
+
+export interface EbayBrowseItem {
+  itemId: string;
+  legacyItemId?: string;
+  title: string;
+  price?: { value: string; currency: string };
+  localizedAspects?: Array<{ name: string; value: string }>;
+  image?: { imageUrl: string };
+  additionalImages?: Array<{ imageUrl: string }>;
+  description?: string;
+}
+
+/**
+ * Fetch a single eBay item by its item ID using the Browse API.
+ * Uses client_credentials grant (no user auth needed).
+ */
+export async function getEbayBrowseItem(itemId: string): Promise<EbayBrowseItem> {
+  const token = await getClientCredentialsToken();
+  const endpoints = getEndpoints();
+
+  // Normalize to full item ID format
+  const fullId = itemId.includes("|") ? itemId : `v1|${itemId}|0`;
+
+  const url = `${endpoints.api}/buy/browse/v1/item/${encodeURIComponent(fullId)}`;
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+    },
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`eBay Browse API error (${itemId}): ${res.status} ${text}`);
+  }
+
+  return res.json();
+}
+

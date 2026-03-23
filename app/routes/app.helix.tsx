@@ -80,33 +80,40 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     orderBy: { createdAt: "desc" },
   });
 
-  // Fetch product titles for suggestions
-  const pendingSuggestions: PriceSuggestion[] = [];
-  for (const s of pendingSuggestionsRaw) {
-    // We store shopifyProductId as the GID, fetch title via a lightweight query
-    let productTitle = s.shopifyProductId;
+  // Batch-fetch product titles for all suggestions in a single GraphQL call
+  const productIds = [
+    ...new Set(pendingSuggestionsRaw.map((s) => s.shopifyProductId)),
+  ];
+  const titleMap = new Map<string, string>();
+  if (productIds.length > 0) {
     try {
       const response = await admin.graphql(
-        `query ($id: ID!) { product(id: $id) { title } }`,
-        { variables: { id: s.shopifyProductId } },
+        `query ($ids: [ID!]!) { nodes(ids: $ids) { ... on Product { id title } } }`,
+        { variables: { ids: productIds } },
       );
       const data = await response.json();
-      productTitle = data.data?.product?.title ?? s.shopifyProductId;
+      for (const node of data.data?.nodes ?? []) {
+        if (node?.id && node?.title) {
+          titleMap.set(node.id, node.title);
+        }
+      }
     } catch {
-      // Use product ID as fallback
+      // Fall back to using product IDs as titles
     }
+  }
 
-    pendingSuggestions.push({
+  const pendingSuggestions: PriceSuggestion[] = pendingSuggestionsRaw.map(
+    (s) => ({
       id: s.id,
       shopifyProductId: s.shopifyProductId,
       currentPrice: s.currentPrice.toString(),
       suggestedPrice: s.suggestedPrice.toString(),
       reason: s.reason,
-      productTitle,
+      productTitle: titleMap.get(s.shopifyProductId) ?? s.shopifyProductId,
       source: s.source,
       certNumber: s.certNumber ?? undefined,
-    });
-  }
+    }),
+  );
 
   const lastFetch = await db.syncLog.findFirst({
     where: { shopId: shop, marketplace: "helix", action: "price_fetch" },
@@ -151,9 +158,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "approve-price") {
     const suggestionId = formData.get("suggestionId") as string;
     if (!suggestionId) return { error: "Missing suggestion ID" };
-    const result = await approvePriceSuggestion(admin, shop, suggestionId);
-    if (!result.success) return { error: result.error };
-    return { approved: 1 };
+    try {
+      const result = await approvePriceSuggestion(admin, shop, suggestionId);
+      if (!result.success) return { error: result.error };
+      return { approved: 1 };
+    } catch (err) {
+      return { success: false, error: String(err) };
+    }
   }
 
   if (intent === "bulk-approve-prices") {
@@ -164,10 +175,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const results: Array<{ id: string; success: boolean; error?: string }> = [];
     for (let i = 0; i < suggestionIds.length; i += BATCH_SIZE) {
       const batch = suggestionIds.slice(i, i + BATCH_SIZE);
-      const batchResults = await Promise.all(
-        batch.map((id) => approvePriceSuggestion(admin, shop, id)),
-      );
-      results.push(...batchResults);
+      try {
+        const batchResults = await Promise.all(
+          batch.map((id) => approvePriceSuggestion(admin, shop, id)),
+        );
+        results.push(...batchResults);
+      } catch (err) {
+        results.push(
+          ...batch.map((id) => ({
+            id,
+            success: false,
+            error: String(err),
+          })),
+        );
+      }
     }
 
     const failures = results.filter((r) => !r.success);
@@ -184,10 +205,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "reject-price") {
     const suggestionId = formData.get("suggestionId") as string;
     if (!suggestionId) return { error: "Missing suggestion ID" };
-    await db.priceSuggestion.update({
-      where: { id: suggestionId },
+    const { count } = await db.priceSuggestion.updateMany({
+      where: { id: suggestionId, shopId: shop, status: "pending" },
       data: { status: "rejected", reviewedAt: new Date() },
     });
+    if (count === 0) return { error: "Suggestion not found or already reviewed" };
     return { rejected: 1 };
   }
 
@@ -561,6 +583,14 @@ function SuggestionRow({ suggestion }: { suggestion: PriceSuggestion }) {
     (approveFetcher.data as Record<string, unknown>)?.approved ||
     (rejectFetcher.data as Record<string, unknown>)?.rejected;
 
+  const approveError = (approveFetcher.data as Record<string, unknown>)?.error as
+    | string
+    | undefined;
+  const rejectError = (rejectFetcher.data as Record<string, unknown>)?.error as
+    | string
+    | undefined;
+  const inlineError = approveError || rejectError;
+
   if (isDone) return null;
 
   return (
@@ -573,6 +603,9 @@ function SuggestionRow({ suggestion }: { suggestion: PriceSuggestion }) {
           ${suggestion.currentPrice} → ${suggestion.suggestedPrice}
           {suggestion.certNumber && ` · Cert: ${suggestion.certNumber}`}
         </s-text>
+        {inlineError && (
+          <s-text tone="critical">{inlineError}</s-text>
+        )}
       </s-stack>
       <s-stack direction="inline" gap="small">
         <approveFetcher.Form method="post">
