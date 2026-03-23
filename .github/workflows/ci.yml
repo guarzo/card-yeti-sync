@@ -47,6 +47,9 @@ jobs:
       - name: Validate Prisma
         run: npx prisma generate && npx prisma validate
 
+      - name: Create shadow database
+        run: PGPASSWORD=ci createdb -h localhost -U ci ci_shadow
+
       - name: Check Prisma migration drift
         run: npx prisma migrate diff --from-schema-datamodel prisma/schema.prisma --to-migrations prisma/migrations --shadow-database-url "postgresql://ci:ci@localhost:5432/ci_shadow" --exit-code
 
