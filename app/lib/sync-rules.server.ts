@@ -1,21 +1,8 @@
-// app/lib/sync-rules.server.ts
 import type { MarketplaceAccount } from "@prisma/client";
+import { type SyncRules, DEFAULT_SYNC_RULES } from "./sync-rules";
 
-export interface SyncRules {
-  productTypes: string[];
-  excludeTags: string[];
-  priceMin: number | null;
-  priceMax: number | null;
-  autoSyncNew: boolean;
-}
-
-export const DEFAULT_SYNC_RULES: SyncRules = {
-  productTypes: ["Graded Card", "Raw Single", "Sealed Product", "Curated Lot"],
-  excludeTags: [],
-  priceMin: null,
-  priceMax: null,
-  autoSyncNew: true,
-};
+export type { SyncRules };
+export { DEFAULT_SYNC_RULES };
 
 export function getSyncRules(account: MarketplaceAccount): SyncRules {
   const settings = (account.settings ?? {}) as Record<string, unknown>;

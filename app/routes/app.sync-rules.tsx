@@ -4,7 +4,7 @@ import type { Prisma } from "@prisma/client";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { MARKETPLACE_CONFIG, type MarketplaceKey } from "../lib/marketplace-config";
-import { type SyncRules, DEFAULT_SYNC_RULES } from "../lib/sync-rules.server";
+import { type SyncRules, DEFAULT_SYNC_RULES } from "../lib/sync-rules";
 
 const PRODUCT_TYPES = [
   "Graded Card",
