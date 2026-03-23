@@ -39,6 +39,13 @@ export function validateHmacState(
   let stateHmac: string;
   try {
     const parsed = JSON.parse(Buffer.from(state, "base64url").toString());
+    if (
+      typeof parsed.shop !== "string" ||
+      typeof parsed.nonce !== "string" ||
+      typeof parsed.hmac !== "string"
+    ) {
+      return { valid: false };
+    }
     stateShop = parsed.shop;
     stateNonce = parsed.nonce;
     stateHmac = parsed.hmac;

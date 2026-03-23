@@ -1,4 +1,4 @@
-:root {
+.index {
   --color-background: #f0f5f8;
   --color-primary: #1a2744;
   --color-primary-hover: #2a3d5c;
@@ -7,13 +7,12 @@
   --color-text-secondary: #6a8aaa;
   --color-border: #a8c4d8;
   --color-accent: #3a7ab5;
-}
 
-.index {
   align-items: center;
   display: flex;
   justify-content: center;
   min-height: 100vh;
+  min-height: 100dvh;
   width: 100%;
   text-align: center;
   padding: 2rem 1rem;
@@ -71,7 +70,7 @@
 
 .label > span:last-child {
   font-size: 0.8rem;
-  color: var(--color-text-secondary);
+  color: var(--color-text-muted);
   font-weight: 400;
 }
 

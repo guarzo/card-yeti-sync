@@ -52,6 +52,7 @@ export function actionTone(
 ): "success" | "critical" | "info" | "caution" | undefined {
   const map: Record<string, "success" | "critical" | "info" | "caution"> = {
     list: "success",
+    delist: "critical",
     update: "info",
     reconcile: "caution",
     price_update: "info",

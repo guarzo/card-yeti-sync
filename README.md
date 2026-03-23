@@ -53,7 +53,7 @@ Integration with the new Pokémon card marketplace featuring 4.9% seller fees an
 | **Framework** | React Router v7 (SSR) |
 | **UI** | Shopify Polaris Web Components |
 | **Language** | TypeScript (strict mode) |
-| **Database** | Prisma + SQLite (dev) / PostgreSQL (prod) |
+| **Database** | Prisma + PostgreSQL |
 | **Build** | Vite |
 | **Hosting** | Fly.io |
 | **Auth** | Shopify managed installation + eBay OAuth |
@@ -91,11 +91,18 @@ app/
     EmptyState.tsx                   #   Empty state with icon + CTA
     DisconnectButton.tsx             #   Disconnect with confirmation
     RelativeTime.tsx                 #   SSR-safe relative timestamps
+    dashboard/                       #   Dashboard-specific components
+      AttentionZone.tsx              #     Priority banners (errors, expiring tokens)
+      MarketplaceTile.tsx            #     Marketplace health tile
+      SyncSummary.tsx                #     Listings-by-marketplace counts
+      ProductsSyncTable.tsx          #     Products table with dynamic marketplace columns
+      BulkApproveModal.tsx           #     Bulk price suggestion review
   routes/
-    app._index.tsx                   # Dashboard — products, sync status, marketplace overview
+    app._index.tsx                   # Dashboard — 5-zone priority layout
     app.ebay.tsx                     # eBay — connect account, policies, sync settings
     app.whatnot.tsx                  # Whatnot — CSV export, inventory breakdown
     app.helix.tsx                    # Helix — connection, roadmap, inventory readiness
+    api.ebay-callback.tsx            # eBay OAuth callback
     webhooks.products.*.tsx          # Product create/update handlers
     webhooks.orders.create.tsx       # Cross-channel delist on sale
     webhooks.inventory.*.tsx         # Inventory change propagation
@@ -103,13 +110,15 @@ app/
     marketplace-config.ts            # Shared marketplace constants
     graphql-queries.server.ts        # Shared Shopify GraphQL queries
     ebay-client.server.ts            # eBay OAuth + API client
+    hmac-state.server.ts             # CSRF/OAuth state validation
     ui-helpers.ts                    # Formatting utilities
     use-relative-time.ts             # SSR-safe relative time hook
   db.server.ts                       # Prisma client singleton
   shopify.server.ts                  # Shopify app configuration
 
 prisma/
-  schema.prisma                      # Session, MarketplaceAccount, MarketplaceListing, SyncLog
+  schema.prisma                      # Session, MarketplaceAccount, MarketplaceListing,
+                                     # SyncLog, OAuthNonce, PriceSuggestion
 ```
 
 ## Data Model
@@ -123,12 +132,15 @@ MarketplaceAccount ──┐
   tokenExpiry         │           status (active|delisted|error|pending)
   settings (JSON)     │           lastSyncedAt
                       │
-                      │
-SyncLog ──────────────┘
-  marketplace
-  action (list|delist|update|reconcile|price_update)
-  status (success|error)
-  details (JSON)
+SyncLog               │
+  marketplace         │
+  action              │         OAuthNonce
+  status              │           shopId, nonce, expiresAt
+  details (JSON)      │
+                      │         PriceSuggestion
+                      │           shopifyProductId
+                      │           currentPrice, suggestedPrice
+                      │           status (pending|approved|rejected)
 ```
 
 Products in Shopify use custom metafields under the `card` namespace (19 fields covering card identity, grading, condition, and commerce data). These are mapped to each marketplace's native format by the adapter layer.
@@ -172,6 +184,8 @@ Set automatically by Shopify CLI during development. For production, configure o
 | `npm run typecheck` | TypeScript type checking |
 | `npm run lint` | ESLint |
 | `npm run setup` | Generate Prisma client + run migrations |
+| `npm run test` | Run Vitest tests |
+| `npm run dev:full` | Start Fly DB proxy + Shopify dev server |
 
 ---
 

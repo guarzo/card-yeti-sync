@@ -49,12 +49,10 @@ fi
 echo "Starting DB proxy (localhost:15432 -> card-yeti-sync-db:5432)..."
 fly proxy 15432:5432 -a card-yeti-sync-db &
 PROXY_PID=$!
+trap 'kill "$PROXY_PID" 2>/dev/null || true' EXIT INT TERM
 
 # Give the proxy a moment to bind
 sleep 2
 
 echo "Starting Shopify dev server..."
 shopify app dev
-
-# Cleanup proxy on exit
-kill "$PROXY_PID" 2>/dev/null || true

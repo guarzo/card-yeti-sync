@@ -1,20 +1,32 @@
-import { useEffect, useState } from "react";
-import { Form } from "react-router";
-
-interface PriceSuggestion {
-  id: string;
-  shopifyProductId: string;
-  currentPrice: string;
-  suggestedPrice: string;
-  reason: string | null;
-  productTitle?: string;
-}
+import { useCallback, useEffect, useState } from "react";
+import { useFetcher } from "react-router";
+import type { PriceSuggestion } from "../../types/dashboard";
 
 interface BulkApproveModalProps {
   suggestions: PriceSuggestion[];
   open: boolean;
   onClose: () => void;
 }
+
+const overlayStyle: React.CSSProperties = {
+  position: "fixed",
+  top: 0,
+  left: 0,
+  right: 0,
+  bottom: 0,
+  zIndex: 999,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  backgroundColor: "rgba(0,0,0,0.3)",
+};
+
+const dialogStyle: React.CSSProperties = {
+  maxHeight: "80vh",
+  overflow: "auto",
+  width: "min(600px, 90vw)",
+  boxShadow: "0 4px 24px rgba(0,0,0,0.15)",
+};
 
 export function BulkApproveModal({
   suggestions,
@@ -24,11 +36,43 @@ export function BulkApproveModal({
   const [selected, setSelected] = useState<Set<string>>(
     new Set(suggestions.map((s) => s.id)),
   );
+  const fetcher = useFetcher();
+  const isSubmitting = fetcher.state === "submitting";
+
+  const result = fetcher.data as
+    | {
+        approved?: number;
+        error?: string;
+        partialSuccess?: boolean;
+        failed?: number;
+      }
+    | undefined;
 
   // Reset selection when suggestions change (e.g., after inline approval)
   useEffect(() => {
     setSelected(new Set(suggestions.map((s) => s.id)));
   }, [suggestions]);
+
+  // Close on full success
+  useEffect(() => {
+    if (result?.approved && !result?.partialSuccess) {
+      onClose();
+    }
+  }, [result, onClose]);
+
+  // Escape to close
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    },
+    [onClose],
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [open, handleKeyDown]);
 
   if (!open || suggestions.length === 0) return null;
 
@@ -53,27 +97,15 @@ export function BulkApproveModal({
   }
 
   return (
+    /* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */
     <div
-      style={{
-        position: "fixed",
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        zIndex: 999,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        backgroundColor: "rgba(0,0,0,0.3)",
-      }}
+      style={overlayStyle}
+      onClick={onClose}
     >
+      {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
       <div
-        style={{
-          maxHeight: "80vh",
-          overflow: "auto",
-          width: "min(600px, 90vw)",
-          boxShadow: "0 4px 24px rgba(0,0,0,0.15)",
-        }}
+        style={dialogStyle}
+        onClick={(e) => e.stopPropagation()}
       >
         <s-box
           padding="large"
@@ -118,11 +150,20 @@ export function BulkApproveModal({
 
             <s-divider />
 
+            {result?.error && (
+              <s-banner tone="critical">{result.error}</s-banner>
+            )}
+            {result?.partialSuccess && (
+              <s-banner tone="warning">
+                {result.approved} approved, {result.failed} failed.
+              </s-banner>
+            )}
+
             <s-stack direction="inline" gap="base">
               <s-button variant="secondary" onClick={() => onClose()}>
                 Cancel
               </s-button>
-              <Form method="post">
+              <fetcher.Form method="post">
                 <input type="hidden" name="intent" value="bulk-approve-prices" />
                 {Array.from(selected).map((id) => (
                   <input key={id} type="hidden" name="suggestionIds" value={id} />
@@ -130,11 +171,13 @@ export function BulkApproveModal({
                 <s-button
                   variant="primary"
                   type="submit"
-                  disabled={selected.size === 0}
+                  disabled={selected.size === 0 || isSubmitting || undefined}
                 >
-                  Approve {selected.size} suggestion{selected.size !== 1 ? "s" : ""}
+                  {isSubmitting
+                    ? "Approving..."
+                    : `Approve ${selected.size} suggestion${selected.size !== 1 ? "s" : ""}`}
                 </s-button>
-              </Form>
+              </fetcher.Form>
             </s-stack>
           </s-stack>
         </s-box>

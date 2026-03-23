@@ -35,7 +35,7 @@ I run a Pokémon card shop on Shopify ([Card Yeti](https://cardyeti.com)) and I'
 | Component | Status | Description |
 |:----------|:-------|:------------|
 | **Shopify App** | Active | Embedded admin app with priority-driven sync dashboard — at-a-glance marketplace health, sync activity, per-product listing status across all channels, and price suggestion review workflow |
-| **eBay Integration** | Active | OAuth + Sell Inventory API with automatic policy assignment |
+| **eBay Integration** | In Development | OAuth active, Sell Inventory API adapter + automatic policy assignment in progress |
 | **Whatnot Export** | CSV Ready | Bulk upload file generation with rich card descriptions |
 | **19 Card Metafields** | Live in Production | Structured data per card across hundreds of products |
 | **Cross-Channel Delist** | In Development | Auto-remove from other channels when a card sells |

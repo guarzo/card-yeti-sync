@@ -6,6 +6,7 @@ interface StatCardProps {
   description?: string;
   background?: "subdued";
   children?: ReactNode;
+  href?: string;
 }
 
 export function StatCard({
@@ -14,8 +15,9 @@ export function StatCard({
   description,
   background,
   children,
+  href,
 }: StatCardProps) {
-  return (
+  const card = (
     <s-box
       padding="base"
       borderWidth="base"
@@ -32,4 +34,14 @@ export function StatCard({
       </s-stack>
     </s-box>
   );
+
+  if (href) {
+    return (
+      <a href={href} style={{ textDecoration: "none", color: "inherit" }}>
+        {card}
+      </a>
+    );
+  }
+
+  return card;
 }

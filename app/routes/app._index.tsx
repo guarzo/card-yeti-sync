@@ -9,6 +9,7 @@ import { useLoaderData, useRouteError } from "react-router";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import db from "../db.server";
+import { approvePriceSuggestion } from "../lib/approve-price.server";
 import {
   formatAction,
   actionIcon,
@@ -22,72 +23,20 @@ import {
 } from "../lib/marketplace-config";
 import { EmptyState } from "../components/EmptyState";
 import { RelativeTime } from "../components/RelativeTime";
+import { StatCard } from "../components/StatCard";
 import { AttentionZone } from "../components/dashboard/AttentionZone";
 import { MarketplaceTile } from "../components/dashboard/MarketplaceTile";
 import { SyncSummary } from "../components/dashboard/SyncSummary";
 import { ProductsSyncTable } from "../components/dashboard/ProductsSyncTable";
 import { BulkApproveModal } from "../components/dashboard/BulkApproveModal";
-
-interface Product {
-  id: string;
-  title: string;
-  status: string;
-  totalInventory: number;
-  productType: string;
-  featuredImage: { url: string } | null;
-  price: string | null;
-}
-
-interface SyncLogEntry {
-  id: string;
-  marketplace: string;
-  action: string;
-  status: string;
-  productTitle: string | null;
-  createdAt: string;
-}
-
-interface MarketplaceInfo {
-  connected: boolean;
-  activeCount: number;
-  errorCount: number;
-  pendingCount: number;
-  tokenExpiry: string | null;
-}
-
-interface PriceSuggestionEntry {
-  id: string;
-  shopifyProductId: string;
-  currentPrice: string;
-  suggestedPrice: string;
-  reason: string | null;
-  productTitle?: string;
-}
-
-interface ListingStatusEntry {
-  marketplace: string;
-  status: string;
-  errorMessage: string | null;
-  lastSyncedAt: string | null;
-}
-
-interface LoaderData {
-  products: Product[];
-  productCount: number;
-  activeProductCount: number;
-  marketplaces: Record<string, MarketplaceInfo>;
-  recentLogs: SyncLogEntry[];
-  listingsByProduct: Record<string, ListingStatusEntry[]>;
-  priceSuggestions: Record<string, PriceSuggestionEntry>;
-  pendingPriceReviews: number;
-  connectedMarketplaces: MarketplaceKey[];
-  productsAwaitingSync: number;
-  totalActiveListings: number;
-  totalPendingSyncs: number;
-  totalErrors: number;
-  hasNextPage: boolean;
-  endCursor: string | null;
-}
+import type {
+  Product,
+  SyncLogEntry,
+  MarketplaceInfo,
+  PriceSuggestion,
+  ListingStatus,
+  LoaderData,
+} from "../types/dashboard";
 
 export const meta: MetaFunction = () => [
   { title: "Dashboard | Card Yeti Sync" },
@@ -101,7 +50,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const afterCursor = url.searchParams.get("after") ?? null;
 
   // Phase 1: Run independent queries in parallel
-  const [graphqlResponse, accounts, statusCounts, recentLogs, pendingSuggestions] =
+  const [graphqlResponse, accounts, statusCounts, recentLogs, pendingSuggestions, totalProductsWithListings] =
     await Promise.all([
       admin.graphql(
         `#graphql
@@ -142,6 +91,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       }),
       db.priceSuggestion.findMany({
         where: { shopId: shop, status: "pending" },
+      }),
+      db.marketplaceListing.groupBy({
+        by: ["shopifyProductId"],
+        where: { shopId: shop },
       }),
     ]);
 
@@ -221,7 +174,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   );
 
   // Build per-product listing map (full status info, not just marketplace names)
-  const listingsByProduct: Record<string, ListingStatusEntry[]> = {};
+  const listingsByProduct: Record<string, ListingStatus[]> = {};
   for (const l of listings) {
     (listingsByProduct[l.shopifyProductId] ??= []).push({
       marketplace: l.marketplace,
@@ -232,7 +185,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   // Build price suggestions map (keyed by product ID)
-  const priceSuggestions: Record<string, PriceSuggestionEntry> = {};
+  const priceSuggestions: Record<string, PriceSuggestion> = {};
   for (const s of pendingSuggestions) {
     priceSuggestions[s.shopifyProductId] = {
       id: s.id,
@@ -244,10 +197,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   // Count products with no marketplace listings (global, not page-scoped)
-  const totalProductsWithListings = await db.marketplaceListing.groupBy({
-    by: ["shopifyProductId"],
-    where: { shopId: shop },
-  });
   const productsAwaitingSync = Math.max(
     0,
     productCount - totalProductsWithListings.length,
@@ -338,64 +287,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "approve-price") {
     const suggestionId = formData.get("suggestionId") as string;
     if (!suggestionId) return { error: "Missing suggestion ID" };
-
-    const suggestion = await db.priceSuggestion.findFirst({
-      where: { id: suggestionId, shopId: shop, status: "pending" },
-    });
-    if (!suggestion) return { error: "Suggestion not found" };
-
-    // Look up variant IDs for this product (required for price update)
-    const variantResponse = await admin.graphql(
-      `#graphql
-      query getVariants($productId: ID!) {
-        product(id: $productId) {
-          variants(first: 10) {
-            nodes { id }
-          }
-        }
-      }`,
-      { variables: { productId: suggestion.shopifyProductId } },
-    );
-    const variantData = await variantResponse.json();
-    const variants = variantData.data?.product?.variants?.nodes ?? [];
-    if (variants.length === 0) {
-      return { error: "No variants found for this product" };
-    }
-
-    // Update all variant prices via productVariantsBulkUpdate
-    const mutationResponse = await admin.graphql(
-      `#graphql
-      mutation bulkUpdateVariantPrice($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-        productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-          productVariants { id }
-          userErrors { field message }
-        }
-      }`,
-      {
-        variables: {
-          productId: suggestion.shopifyProductId,
-          variants: variants.map((v: { id: string }) => ({
-            id: v.id,
-            price: suggestion.suggestedPrice.toString(),
-          })),
-        },
-      },
-    );
-    const mutationData = await mutationResponse.json();
-    const userErrors = mutationData.data?.productVariantsBulkUpdate?.userErrors ?? [];
-    if (userErrors.length > 0) {
-      return { error: `Shopify error: ${userErrors[0].message}` };
-    }
-
-    // Mark suggestion as approved
-    await db.priceSuggestion.update({
-      where: { id: suggestionId },
-      data: { status: "approved", reviewedAt: new Date() },
-    });
-
-    // TODO: Queue marketplace price syncs (eBay, Whatnot, Helix) for this product.
-    // The marketplace adapter pattern will handle propagating the new price.
-
+    const result = await approvePriceSuggestion(admin, shop, suggestionId);
+    if (!result.success) return { error: result.error };
     return { approved: true };
   }
 
@@ -403,71 +296,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const suggestionIds = formData.getAll("suggestionIds") as string[];
     if (suggestionIds.length === 0) return { error: "No suggestions selected" };
 
+    const BATCH_SIZE = 5;
     const results: Array<{ id: string; success: boolean; error?: string }> = [];
-    for (const id of suggestionIds) {
-      try {
-        const suggestion = await db.priceSuggestion.findFirst({
-          where: { id, shopId: shop, status: "pending" },
-        });
-        if (!suggestion) {
-          results.push({ id, success: false, error: "Not found" });
-          continue;
-        }
-
-        // Look up variant IDs
-        const variantResponse = await admin.graphql(
-          `#graphql
-          query getVariants($productId: ID!) {
-            product(id: $productId) {
-              variants(first: 10) { nodes { id } }
-            }
-          }`,
-          { variables: { productId: suggestion.shopifyProductId } },
-        );
-        const variantData = await variantResponse.json();
-        const variants = variantData.data?.product?.variants?.nodes ?? [];
-        if (variants.length === 0) {
-          results.push({ id, success: false, error: "No variants found" });
-          continue;
-        }
-
-        const mutationResponse = await admin.graphql(
-          `#graphql
-          mutation bulkUpdateVariantPrice($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-            productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-              productVariants { id }
-              userErrors { field message }
-            }
-          }`,
-          {
-            variables: {
-              productId: suggestion.shopifyProductId,
-              variants: variants.map((v: { id: string }) => ({
-                id: v.id,
-                price: suggestion.suggestedPrice.toString(),
-              })),
-            },
-          },
-        );
-        const mutationData = await mutationResponse.json();
-        const userErrors = mutationData.data?.productVariantsBulkUpdate?.userErrors ?? [];
-        if (userErrors.length > 0) {
-          results.push({ id, success: false, error: userErrors[0].message });
-          continue;
-        }
-
-        await db.priceSuggestion.update({
-          where: { id },
-          data: { status: "approved", reviewedAt: new Date() },
-        });
-        results.push({ id, success: true });
-      } catch (err) {
-        results.push({
-          id,
-          success: false,
-          error: err instanceof Error ? err.message : "Unknown error",
-        });
-      }
+    for (let i = 0; i < suggestionIds.length; i += BATCH_SIZE) {
+      const batch = suggestionIds.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.all(
+        batch.map((id) => approvePriceSuggestion(admin, shop, id)),
+      );
+      results.push(...batchResults);
     }
 
     const failures = results.filter((r) => !r.success);
@@ -525,113 +361,37 @@ export default function Dashboard() {
       {/* Zone 2: Stat Row */}
       <s-box paddingBlock="base">
         <s-grid
-          gridTemplateColumns="1fr 1fr 1fr 1fr 1fr"
+          gridTemplateColumns="repeat(auto-fit, minmax(140px, 1fr))"
           gap="base"
         >
           <s-grid-item>
-            <a href="#products-sync" style={{ textDecoration: "none", color: "inherit" }}>
-              <s-box
-                padding="base"
-                borderWidth="base"
-                borderRadius="base"
-                background="subdued"
-              >
-                <s-stack direction="block" gap="small">
-                  <s-text color="subdued">Total Products</s-text>
-                  <div style={{ fontSize: "1.25rem" }}>
-                    <s-text type="strong">
-                      {productCount}
-                    </s-text>
-                  </div>
-                </s-stack>
-              </s-box>
-            </a>
+            <StatCard label="Total Products" value={productCount} background="subdued" href="#products-sync" />
           </s-grid-item>
           <s-grid-item>
-            <a href="#products-sync" style={{ textDecoration: "none", color: "inherit" }}>
-              <s-box
-                padding="base"
-                borderWidth="base"
-                borderRadius="base"
-                background="subdued"
-              >
-                <s-stack direction="block" gap="small">
-                  <s-text color="subdued">Active Listings</s-text>
-                  <div style={{ fontSize: "1.25rem" }}>
-                    <s-text type="strong">
-                      {totalActiveListings}
-                    </s-text>
-                  </div>
-                </s-stack>
-              </s-box>
-            </a>
+            <StatCard label="Active Listings" value={totalActiveListings} background="subdued" href="#products-sync" />
           </s-grid-item>
           <s-grid-item>
-            <a href="?filter=price_reviews#products-sync" style={{ textDecoration: "none", color: "inherit" }}>
-              <s-box
-                padding="base"
-                borderWidth="base"
-                borderRadius="base"
-                background={pendingPriceReviews > 0 ? undefined : "subdued"}
-              >
-                <s-stack direction="block" gap="small">
-                  <s-text color="subdued">Price Reviews</s-text>
-                  <s-stack direction="inline" gap="small" alignItems="center">
-                    <div style={{ fontSize: "1.25rem" }}>
-                      <s-text type="strong">
-                        {pendingPriceReviews}
-                      </s-text>
-                    </div>
-                    {pendingPriceReviews > 0 && (
-                      <s-badge tone="info">new</s-badge>
-                    )}
-                  </s-stack>
-                </s-stack>
-              </s-box>
-            </a>
+            <StatCard
+              label="Price Reviews"
+              value={pendingPriceReviews}
+              background={pendingPriceReviews > 0 ? undefined : "subdued"}
+              href="?filter=price_reviews#products-sync"
+            >
+              {pendingPriceReviews > 0 && <s-badge tone="info">new</s-badge>}
+            </StatCard>
           </s-grid-item>
           <s-grid-item>
-            <a href="?filter=pending#products-sync" style={{ textDecoration: "none", color: "inherit" }}>
-              <s-box
-                padding="base"
-                borderWidth="base"
-                borderRadius="base"
-                background="subdued"
-              >
-                <s-stack direction="block" gap="small">
-                  <s-text color="subdued">Pending Syncs</s-text>
-                  <div style={{ fontSize: "1.25rem" }}>
-                    <s-text type="strong">
-                      {totalPendingSyncs}
-                    </s-text>
-                  </div>
-                </s-stack>
-              </s-box>
-            </a>
+            <StatCard label="Pending Syncs" value={totalPendingSyncs} background="subdued" href="?filter=pending#products-sync" />
           </s-grid-item>
           <s-grid-item>
-            <a href="?filter=errors#products-sync" style={{ textDecoration: "none", color: "inherit" }}>
-              <s-box
-                padding="base"
-                borderWidth="base"
-                borderRadius="base"
-                background={totalErrors > 0 ? undefined : "subdued"}
-              >
-                <s-stack direction="block" gap="small">
-                  <s-text color="subdued">Errors</s-text>
-                  <s-stack direction="inline" gap="small" alignItems="center">
-                    <div style={{ fontSize: "1.25rem" }}>
-                      <s-text type="strong">
-                        {totalErrors}
-                      </s-text>
-                    </div>
-                    {totalErrors > 0 && (
-                      <s-badge tone="critical">{totalErrors}</s-badge>
-                    )}
-                  </s-stack>
-                </s-stack>
-              </s-box>
-            </a>
+            <StatCard
+              label="Errors"
+              value={totalErrors}
+              background={totalErrors > 0 ? undefined : "subdued"}
+              href="?filter=errors#products-sync"
+            >
+              {totalErrors > 0 && <s-badge tone="critical">{totalErrors}</s-badge>}
+            </StatCard>
           </s-grid-item>
         </s-grid>
       </s-box>
@@ -658,6 +418,7 @@ export default function Dashboard() {
           {/* Marketplace tiles */}
           {Object.entries(MARKETPLACE_CONFIG).map(([key, config]) => {
             const info = marketplaces[key];
+            if (!info) return null;
             return (
               <s-grid-item key={key}>
                 <MarketplaceTile

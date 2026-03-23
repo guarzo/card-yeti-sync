@@ -1,35 +1,11 @@
-import { Form, useSearchParams } from "react-router";
+import { useFetcher, useSearchParams } from "react-router";
 import { RelativeTime } from "../RelativeTime";
 import { EmptyState } from "../EmptyState";
 import {
   marketplaceLabel,
   type MarketplaceKey,
 } from "../../lib/marketplace-config";
-
-interface Product {
-  id: string;
-  title: string;
-  status: string;
-  totalInventory: number;
-  productType: string;
-  featuredImage: { url: string } | null;
-  price: string | null;
-}
-
-interface PriceSuggestion {
-  id: string;
-  shopifyProductId: string;
-  currentPrice: string;
-  suggestedPrice: string;
-  reason: string | null;
-}
-
-interface ListingStatus {
-  marketplace: string;
-  status: string;
-  errorMessage: string | null;
-  lastSyncedAt: string | null;
-}
+import type { Product, PriceSuggestion, ListingStatus } from "../../types/dashboard";
 
 interface ProductsSyncTableProps {
   products: Product[];
@@ -42,17 +18,29 @@ interface ProductsSyncTableProps {
   pendingPriceReviews: number;
 }
 
-const STATUS_ICONS: Record<string, string> = {
-  active: "✓",
-  error: "⚠",
-  pending: "○",
-};
-
 function getListingStatus(
   listings: ListingStatus[] | undefined,
   marketplace: string,
 ): ListingStatus | undefined {
   return listings?.find((l) => l.marketplace === marketplace);
+}
+
+function ApproveButton({ suggestionId }: { suggestionId: string }) {
+  const fetcher = useFetcher();
+  const isSubmitting = fetcher.state === "submitting";
+  return (
+    <fetcher.Form method="post">
+      <input type="hidden" name="intent" value="approve-price" />
+      <input type="hidden" name="suggestionId" value={suggestionId} />
+      <s-button
+        variant="primary"
+        type="submit"
+        disabled={isSubmitting || undefined}
+      >
+        {isSubmitting ? "..." : "Approve"}
+      </s-button>
+    </fetcher.Form>
+  );
 }
 
 export function ProductsSyncTable({
@@ -73,7 +61,7 @@ export function ProductsSyncTable({
       <EmptyState
         icon="product"
         heading="No products found"
-        description="Add Pokemon cards to your Shopify store to start syncing across marketplaces. Products with card metafields (pokemon, set name, grade) will get rich listings on every channel."
+        description="Add Pokémon cards to your Shopify store to start syncing across marketplaces. Products with card metafields (pokémon, set name, grade) will get rich listings on every channel."
         action={
           <s-button variant="primary" href="shopify://admin/products/new">
             Add a product
@@ -131,9 +119,8 @@ export function ProductsSyncTable({
             const suggestion = priceSuggestions[product.id];
             const lastSynced = listings
               ?.map((l) => l.lastSyncedAt)
-              .filter(Boolean)
-              .sort()
-              .reverse()[0];
+              .filter((ts): ts is string => ts != null)
+              .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0];
 
             return (
               <s-table-row key={product.id}>
@@ -165,13 +152,7 @@ export function ProductsSyncTable({
                         <s-badge tone="success">
                           ${suggestion.suggestedPrice}
                         </s-badge>
-                        <Form method="post">
-                          <input type="hidden" name="intent" value="approve-price" />
-                          <input type="hidden" name="suggestionId" value={suggestion.id} />
-                          <s-button variant="primary" type="submit">
-                            Approve
-                          </s-button>
-                        </Form>
+                        <ApproveButton suggestionId={suggestion.id} />
                       </s-stack>
                     ) : (
                       <s-text color="subdued">--</s-text>
@@ -199,7 +180,6 @@ export function ProductsSyncTable({
                               : "caution"
                         }
                       >
-                        {STATUS_ICONS[listing.status] ?? "?"}{" "}
                         {listing.status}
                       </s-badge>
                     </s-table-cell>
@@ -231,7 +211,13 @@ export function ProductsSyncTable({
         <s-box padding="large">
           <s-stack direction="block" gap="base" alignItems="center">
             <s-text color="subdued">
-              No products match the &quot;{currentFilter}&quot; filter.
+              No products on this page match the &quot;{currentFilter}&quot; filter.
+              {currentFilter === "errors" &&
+                " Try loading more products or check marketplace pages for details."}
+              {currentFilter === "pending" &&
+                " Pending syncs may be on other pages."}
+              {currentFilter === "price_reviews" &&
+                " Price suggestions may apply to products on other pages."}
             </s-text>
             <s-link href="?filter=all">
               <s-button variant="secondary">Show all products</s-button>

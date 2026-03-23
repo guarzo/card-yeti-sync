@@ -73,12 +73,16 @@ Acceptance criteria:
 
 **As a seller, I want to sync my inventory to Helix to access lower fees (4.9%) and their real-time pricing data.**
 
+**Phase 1 (CSV, current):** CSV export matching the proposed Helix listing schema, with in-app export controls and recency tracking. Price updates imported via CSV download/upload workflow.
+
+**Phase 2 (API, when available):** The CSV adapter is replaced with a full API adapter — same UI, same sync rules, underlying transport changes transparently.
+
 Acceptance criteria:
-- Connect Helix account via OAuth
-- Bulk sync inventory with full card metadata
-- Structured data: pokemon, set, number, grade, cert, population, condition, centering
+- CSV export with full card metadata mapped to Helix schema (Phase 1)
+- Connect Helix account via OAuth (Phase 2)
+- Bulk sync inventory with structured data: pokemon, set, number, grade, cert, population, condition, centering
 - Cross-channel delist on sale
-- Pull Helix pricing data (bid/ask, recent sales, trends) to inform pricing across all channels
+- Pull Helix pricing data (bid/ask, recent sales, trends) to inform pricing across all channels (Phase 2)
 
 ### Cross-Channel Inventory
 

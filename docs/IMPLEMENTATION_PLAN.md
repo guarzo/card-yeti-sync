@@ -1,778 +1,2883 @@
-# Implementation Plan
+# Card Yeti Sync — Remaining Work Implementation Plan
 
-Detailed breakdown of remaining work for Card Yeti Sync. Phase 1 (scaffold, Prisma schema, Helix proposal, dashboard, webhook stubs) is complete. Phase 2 is in progress.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
----
+**Goal:** Complete the eBay integration (policies, mapper, adapter, webhook wiring), build the cross-channel sync engine, add CSV export for Whatnot/Helix with price import, and polish for app store submission.
 
-## What Exists Today
+**Architecture:** The app uses a marketplace adapter pattern — each marketplace gets its own adapter behind a consistent interface. eBay gets a full API adapter; Whatnot and Helix get CSV export adapters since their APIs are not yet available. A central sync engine orchestrates cross-channel operations (delist on sale, reconciliation). Price management uses a CSV download/upload workflow ported from the existing CLI tool. All routes use Shopify's embedded app authentication.
 
-```
-app/routes/
-  app._index.tsx          Dashboard — product overview + per-marketplace sync count cards
-  app.ebay.tsx            eBay settings — OAuth connect/disconnect, policy cards
-  app.whatnot.tsx          Whatnot settings — placeholder UI (CSV export, API notice)
-  app.helix.tsx            Helix settings — placeholder UI (connect button, feature list)
-  app.tsx                  App shell — nav links to Dashboard, eBay, Whatnot, Helix
-  api.ebay-callback.tsx   eBay OAuth callback — exchanges code for tokens, stores in DB
-  webhooks.*.tsx           Stub handlers — log topic + payload, TODO comments for each
+**Tech Stack:** React Router v7, Shopify Polaris Web Components (`s-*`), Prisma ORM (PostgreSQL), TypeScript, Vitest (for business logic tests), eBay Sell Inventory/Account APIs
 
-app/lib/
-  ebay-client.server.ts    eBay OAuth client — auth URL, token exchange, refresh, API calls
-
-prisma/schema.prisma       Session, MarketplaceAccount, MarketplaceListing, SyncLog (PostgreSQL)
-shopify.app.toml           Scopes + webhook subscriptions declared
-fly.toml                   Fly.io deployment config (card-yeti-sync.fly.dev)
-docs/HELIX_PROPOSAL.md    Integration proposal (ready to send)
-docs/PRD.md                Product requirements document
-```
-
-**Infrastructure completed:**
-- Deployed to Fly.io at `card-yeti-sync.fly.dev`
-- PostgreSQL database provisioned on Fly (`card-yeti-sync-db`)
-- Prisma migrated from SQLite to PostgreSQL
-- eBay sandbox developer app configured (RuName: `Thomas_Gamble-ThomasGa-pkmgra-legxmmb`)
-- Environment secrets set on Fly (Shopify, eBay, DATABASE_URL)
-
-**Not yet built:** adapters, mappers, sync engine, functional webhook handlers, business policy management, CSV export, admin block extension, reconciliation endpoint.
+**Testing note:** Vitest is set up in Task 1 for pure business logic (mappers, helpers). Route handlers use `npm run typecheck` + manual dev server verification — mocking the Shopify/eBay auth layer is out of scope for this plan.
 
 ---
 
-## Phase 2: eBay Direct Integration
+## Completed Work Summary
 
-### 2.1 eBay OAuth Client ✅
+- Phase 1: Full scaffold, Prisma schema (6 models), Fly.io deployment, PostgreSQL
+- eBay OAuth: `ebay-client.server.ts`, `api.ebay-callback.tsx`, working connect/disconnect
+- Dashboard: 5-zone priority layout with AttentionZone, MarketplaceTiles, SyncSummary, ProductsSyncTable, BulkApproveModal, PriceSuggestion model
+- GDPR webhooks, HMAC state validation, UI helpers, marketplace config
+- Stub webhook handlers (log only)
+- Placeholder Whatnot/Helix settings pages
 
-**File:** `app/lib/ebay-client.server.ts`
+---
 
-Handles the full OAuth authorization code grant lifecycle for eBay Sell APIs. Ported from the pattern in `yeti-shop/scripts/helpers/ebay-client.js` (which only does client_credentials for Browse API).
+## File Structure
 
-**Status:** Complete. Implements `getAuthorizationUrl()`, `exchangeCodeForTokens()`, `refreshAccessToken()`, and `ebayApiCall()` with reactive 401 refresh. Supports sandbox/production via `EBAY_ENVIRONMENT` env var.
+### New files
 
-**Functions to implement:**
+| File | Responsibility |
+|------|---------------|
+| `vitest.config.ts` | Vitest configuration |
+| `app/lib/shopify-helpers.server.ts` | Product fetcher + metafield extraction via Admin API |
+| `app/lib/ebay-policies.server.ts` | eBay business policy CRUD via Account API |
+| `app/lib/mappers/ebay-mapper.ts` | Shopify product → eBay Inventory API format |
+| `app/lib/mappers/ebay-mapper.test.ts` | Tests for eBay mapper |
+| `app/lib/adapters/ebay.server.ts` | eBay Inventory API adapter (list, update, delist) |
+| `app/lib/sync-engine.server.ts` | Cross-channel sync orchestrator |
+| `app/routes/api.ebay-notifications.tsx` | eBay order notification receiver |
+| `app/routes/api.reconcile.tsx` | QStash cron reconciliation endpoint |
+| `app/lib/mappers/whatnot-mapper.ts` | Shopify product → Whatnot CSV row |
+| `app/lib/mappers/whatnot-mapper.test.ts` | Tests for Whatnot mapper |
+| `app/lib/mappers/helix-mapper.ts` | Shopify product → Helix CSV row |
+| `app/routes/api.export-whatnot.tsx` | Whatnot CSV download endpoint |
+| `app/routes/api.export-helix.tsx` | Helix CSV download endpoint |
+| `app/routes/api.prices.tsx` | Price CSV download + upload endpoint |
+| `extensions/product-sync-status/` | Admin block extension (generated) |
+| `app/routes/app.sync-rules.tsx` | Sync rules configuration UI |
 
-```typescript
-// Build the eBay consent URL for the OAuth redirect
-getAuthorizationUrl(state: string): string
-// Scopes: sell.inventory, sell.account, sell.fulfillment, sell.inventory.readonly
+### Modified files
 
-// Exchange authorization code for access + refresh tokens
-exchangeCodeForTokens(code: string): Promise<{ accessToken, refreshToken, expiresIn }>
+| File | Changes |
+|------|---------|
+| `package.json` | Add vitest dev dependency + test script |
+| `app/routes/webhooks.products.create.tsx` | Wire to eBay adapter |
+| `app/routes/webhooks.products.update.tsx` | Wire to eBay adapter |
+| `app/routes/webhooks.orders.create.tsx` | Wire to sync engine for cross-channel delist |
+| `app/routes/webhooks.inventory.update.tsx` | Wire to sync engine for inventory propagation |
+| `app/routes/app.ebay.tsx` | Functional policies, sync buttons, last sync time |
+| `app/routes/app.whatnot.tsx` | Functional CSV export, last export/price update time |
+| `app/routes/app.helix.tsx` | Functional CSV export, last export/price update time |
+| `app/routes/app.tsx` | Nav updates for sync-rules page |
 
-// Refresh an expired access token using the stored refresh token
-refreshAccessToken(refreshToken: string): Promise<{ accessToken, expiresIn }>
+---
 
-// Make an authenticated API call to any eBay Sell API
-// Handles reactive refresh: on 401, refresh token and retry once
-ebayApiCall(method, url, body, account: MarketplaceAccount): Promise<Response>
-```
+## Phase 2: eBay Integration Core
 
-**Env vars needed:**
-- `EBAY_CLIENT_ID` — from eBay developer portal
-- `EBAY_CLIENT_SECRET` — from eBay developer portal
-- `EBAY_RU_NAME` — redirect URL name configured in eBay portal
-- `EBAY_REDIRECT_URI` — the callback URL (e.g., `https://<app-url>/api/ebay-callback`)
+### Task 1: Set Up Vitest Test Framework
 
-**Token storage:** Access token and refresh token stored in `MarketplaceAccount.accessToken` / `.refreshToken`. Token expiry stored in `.tokenExpiry`. Access token expires in 2 hours; refresh token lasts 18 months.
+**Files:**
+- Create: `vitest.config.ts`
+- Modify: `package.json`
 
-**Key details:**
-- eBay auth endpoint: `https://auth.ebay.com/oauth2/authorize`
-- eBay token endpoint: `https://api.ebay.com/identity/v1/oauth2/token`
-- Auth header for token exchange: `Basic base64(clientId:clientSecret)`
-- Use reactive refresh (retry on 401) rather than preemptive timer
+- [ ] **Step 1: Install vitest**
 
-### 2.2 eBay OAuth Routes ✅
+Run: `npm install -D vitest`
 
-**File:** `app/routes/api.ebay-callback.tsx`
+- [ ] **Step 2: Create vitest config**
 
-Callback route for eBay OAuth. Receives the authorization code after seller consent.
-
-**Status:** Complete. Callback route exchanges code for tokens and upserts into `MarketplaceAccount`. eBay settings page (`app.ebay.tsx`) updated with working connect/disconnect flow. Uses `target="_top"` to break out of Shopify iframe for OAuth redirect.
-
-```
-Flow:
-1. User clicks "Connect eBay" on app.ebay.tsx
-2. App redirects to eBay consent URL (from getAuthorizationUrl)
-3. Seller authorizes on eBay
-4. eBay redirects to /api/ebay-callback?code=XXX&state=YYY
-5. Route exchanges code for tokens via exchangeCodeForTokens()
-6. Stores tokens in MarketplaceAccount (shopId + marketplace="ebay")
-7. Redirects back to /app/ebay with success banner
-```
-
-**Update:** `app/routes/app.ebay.tsx`
-
-Replace the disabled "Connect eBay Account" button with a working link that initiates the OAuth flow. After connection, show the connected account status and a "Disconnect" option.
-
-### 2.3 eBay Business Policy Management
-
-**File:** `app/lib/ebay-policies.server.ts`
-
-Manages eBay business policies (fulfillment, payment, return) via the Account API v1.
-
-**Functions:**
+Create `vitest.config.ts`:
 
 ```typescript
-// Fetch existing policies from eBay
-getExistingPolicies(account): Promise<{
-  fulfillment: Policy[],
-  payment: Policy[],
-  return: Policy[]
-}>
+import { defineConfig } from "vitest/config";
 
-// Create a fulfillment policy
-// USPS Ground Advantage + First Class + Priority, 1 day handling, free shipping >$75
-createFulfillmentPolicy(account, config): Promise<{ policyId }>
-
-// Create a payment policy
-// Immediate payment required, eBay managed payments
-createPaymentPolicy(account, config): Promise<{ policyId }>
-
-// Create a return policy
-// 30-day returns, buyer pays return shipping
-createReturnPolicy(account, config): Promise<{ policyId }>
+export default defineConfig({
+  test: {
+    globals: true,
+    environment: "node",
+    include: ["app/**/*.test.ts"],
+  },
+});
 ```
 
-**API endpoints:**
-- `GET /sell/account/v1/fulfillment_policy?marketplace_id=EBAY_US`
-- `POST /sell/account/v1/fulfillment_policy`
-- `POST /sell/account/v1/payment_policy`
-- `POST /sell/account/v1/return_policy`
+- [ ] **Step 3: Add test script to package.json**
 
-**Policy IDs** are stored in `MarketplaceAccount.settings` as JSON:
+Add to `scripts` in `package.json`:
+
 ```json
-{
-  "fulfillmentPolicyId": "...",
-  "paymentPolicyId": "...",
-  "returnPolicyId": "..."
-}
+"test": "vitest run",
+"test:watch": "vitest"
 ```
 
-**Update:** `app/routes/app.ebay.tsx`
+- [ ] **Step 4: Verify**
 
-Replace static policy cards with:
-- Dropdown to select existing policies OR button to create new ones
-- Show selected policy names and IDs
-- Save to MarketplaceAccount.settings
+Run: `npx vitest run`
+Expected: "No test files found" (no tests yet — that's correct).
 
-### 2.4 eBay Data Mapper
+- [ ] **Step 5: Commit**
 
-**File:** `app/lib/mappers/ebay-mapper.ts`
+```bash
+git add vitest.config.ts package.json package-lock.json
+git commit -m "chore: add vitest test framework"
+```
 
-Transforms a Shopify product + card metafields into the eBay Inventory API format. Port logic from `yeti-shop/scripts/helpers/product-builder.js` and `scripts/import-from-ebay.js`.
+---
 
-**Functions:**
+### Task 2: Shopify Product Fetcher
+
+**Files:**
+- Create: `app/lib/shopify-helpers.server.ts`
+
+Shared helper for fetching products with card metafields from the Shopify Admin API. Used by all adapters, webhook handlers, CSV exports, and the price update workflow.
+
+- [ ] **Step 1: Create the module**
+
+Create `app/lib/shopify-helpers.server.ts`:
 
 ```typescript
-// Extract card metafields from Shopify product into a flat object
-extractCardMetafields(metafieldEdges): CardMetafields
+/**
+ * Shopify Admin API helpers for fetching products with card metafields.
+ * Used by adapters, webhook handlers, and CSV exports.
+ */
 
-// Map Shopify product to eBay inventory item format
-mapToInventoryItem(product, metafields: CardMetafields): EbayInventoryItem
+// All 19 card-namespace metafield keys
+const CARD_METAFIELD_KEYS = [
+  "pokemon", "set_name", "number", "rarity", "year", "language",
+  "condition", "condition_notes", "centering",
+  "grading_company", "grade", "cert_number", "population", "pop_higher", "subgrades",
+  "ebay_comp", "cert_url", "type_label", "ebay_item_id",
+] as const;
 
-// Map Shopify product to eBay offer format (includes policy IDs)
-mapToOffer(product, metafields: CardMetafields, settings: EbaySettings): EbayOffer
-```
+export type CardMetafields = Partial<Record<(typeof CARD_METAFIELD_KEYS)[number], string>>;
 
-**Item specifics mapping** (from card metafields to eBay name-value pairs):
+// GraphQL fragment for card metafields
+const CARD_METAFIELDS_FRAGMENT = CARD_METAFIELD_KEYS.map(
+  (key) => `${key}: metafield(namespace: "card", key: "${key}") { value }`
+).join("\n    ");
 
-| Metafield Key | eBay Item Specific Name |
-|---|---|
-| `pokemon` | `Pokémon Character` |
-| `set_name` | `Set` |
-| `number` | `Card Number` |
-| `grading_company` | `Professional Grader` |
-| `grade` | `Grade` |
-| `cert_number` | `Certification Number` |
-| `language` | `Language` |
-| `year` | `Year Manufactured` |
-| `rarity` | `Rarity` |
-| `condition` | `Card Condition` |
-
-**Price mapping:**
-- eBay listing price = Shopify `compareAtPrice` (the market comp, before the 5% Shopify discount)
-- If no compareAtPrice, use `variant.price / 0.95` to reverse the discount
-
-**eBay Inventory Item shape:**
-```json
-{
-  "availability": { "shipToLocationAvailability": { "quantity": 1 } },
-  "condition": "USED_EXCELLENT",
-  "conditionDescription": "...",
-  "product": {
-    "title": "...",
-    "description": "...",
-    "imageUrls": ["..."],
-    "aspects": {
-      "Pokémon Character": ["Charizard"],
-      "Set": ["Base Set"],
-      "Card Number": ["4/102"],
-      "Professional Grader": ["PSA"],
-      "Grade": ["9"]
+const PRODUCT_WITH_METAFIELDS_QUERY = `
+  query productWithMetafields($id: ID!) {
+    product(id: $id) {
+      id
+      title
+      handle
+      status
+      productType
+      totalInventory
+      featuredImage { url }
+      images(first: 8) { edges { node { url } } }
+      ${CARD_METAFIELDS_FRAGMENT}
+      variants(first: 1) {
+        edges {
+          node {
+            id
+            price
+            compareAtPrice
+            sku
+            inventoryQuantity
+            inventoryItem { id }
+          }
+        }
+      }
     }
   }
-}
-```
+`;
 
-**eBay Offer shape:**
-```json
-{
-  "sku": "PSA-12345678",
-  "marketplaceId": "EBAY_US",
-  "format": "FIXED_PRICE",
-  "availableQuantity": 1,
-  "categoryId": "183454",
-  "listingPolicies": {
-    "fulfillmentPolicyId": "...",
-    "paymentPolicyId": "...",
-    "returnPolicyId": "..."
-  },
-  "pricingSummary": {
-    "price": { "value": "899.00", "currency": "USD" }
+const ALL_PRODUCTS_QUERY = `
+  query allProducts($first: Int!, $after: String, $query: String) {
+    products(first: $first, after: $after, query: $query) {
+      edges {
+        node {
+          id
+          title
+          handle
+          status
+          productType
+          totalInventory
+          featuredImage { url }
+          images(first: 8) {
+            edges { node { url } }
+          }
+          ${CARD_METAFIELDS_FRAGMENT}
+          variants(first: 1) {
+            edges {
+              node {
+                id
+                price
+                compareAtPrice
+                sku
+                inventoryQuantity
+                inventoryItem { id }
+              }
+            }
+          }
+        }
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
   }
-}
-```
-
-### 2.5 eBay Adapter
-
-**File:** `app/lib/adapters/ebay.server.ts`
-
-Implements the marketplace adapter interface using the eBay Inventory API.
-
-**Functions:**
-
-```typescript
-// Create or update an inventory item, create an offer, and publish it
-async listProduct(product, metafields, account): Promise<{
-  marketplaceId: string,  // eBay listing ID
-  offerId: string,        // eBay offer ID (needed for updates/delist)
-  url: string,            // eBay listing URL
-  status: "active" | "error"
-}>
-
-// Update an existing listing (revise inventory item + offer)
-async updateProduct(listing: MarketplaceListing, product, metafields, account): Promise<{ status }>
-
-// End a listing (withdraw offer)
-async delistProduct(listing: MarketplaceListing, account): Promise<{ status }>
-
-// Update just the quantity (0 to hide, 1 to show)
-async updateInventory(listing: MarketplaceListing, quantity, account): Promise<{ status }>
-
-// Update just the price
-async updatePrice(listing: MarketplaceListing, price, account): Promise<{ status }>
-```
-
-**Inventory API call sequence for listing:**
-1. `PUT /sell/inventory/v1/inventory_item/{sku}` — create/update inventory item
-2. `POST /sell/inventory/v1/offer` — create offer with policy IDs
-3. `POST /sell/inventory/v1/offer/{offerId}/publish` — publish to eBay
-4. Store listing ID + offer ID in `MarketplaceListing`
-
-**Bulk operations for initial sync:**
-- `POST /sell/inventory/v1/bulk_create_or_replace_inventory_item` (25 items/call)
-- `POST /sell/inventory/v1/bulk_create_offer` (25 items/call)
-- `POST /sell/inventory/v1/bulk_publish_offer` (25 items/call)
-
-**Delist:** `POST /sell/inventory/v1/offer/{offerId}/withdraw`
-
-**Update price:** `POST /sell/inventory/v1/bulk_update_price_quantity` (up to 25)
-
-**Error handling:**
-- 401 → refresh token and retry (handled by ebay-client.server.ts)
-- 409 (conflict) → item already exists, switch to update flow
-- 404 on delist → already removed, mark as delisted
-- Log all errors to SyncLog
-
-### 2.6 Wire Up the eBay Settings Page
-
-**Update:** `app/routes/app.ebay.tsx`
-
-Full functional rewrite:
-
-1. **Connection section:**
-   - If not connected: "Connect eBay Account" button → initiates OAuth
-   - If connected: show account status, last token refresh, "Disconnect" button
-
-2. **Business Policies section:**
-   - Load existing eBay policies via Account API
-   - Dropdowns to select fulfillment, payment, return policy
-   - Or "Create Default Policies" button that creates Card Yeti's standard policies
-   - Save selected policy IDs to MarketplaceAccount.settings
-
-3. **Sync section:**
-   - "Sync All Products" button → bulk sync via adapter
-   - "Sync New Only" button → sync products not yet in MarketplaceListing
-   - Product count: X synced / Y total
-   - Last sync timestamp
-   - Error list with retry buttons
-
-4. **Sync Rules section (Phase 5, placeholder for now):**
-   - Which product types to sync
-   - Collection filters
-   - Price markup rules
-
-### 2.7 Wire Up Product Webhook Handlers
-
-**Update:** `app/routes/webhooks.products.update.tsx` and `webhooks.products.create.tsx`
-
-Replace the stub with:
-1. Look up `MarketplaceAccount` for this shop where marketplace = "ebay"
-2. If no eBay connection, return early
-3. Extract product data from webhook payload
-4. Fetch full product details via Admin API (webhook payload may be partial)
-5. Fetch card metafields for the product
-6. Check if a `MarketplaceListing` exists for this product + "ebay"
-7. If exists → call `ebayAdapter.updateProduct()`
-8. If not exists → call `ebayAdapter.listProduct()`
-9. Update/create `MarketplaceListing` record
-10. Log to `SyncLog`
-
-### 2.8 Verification
-
-- [ ] Connect eBay account via settings page — tokens stored in MarketplaceAccount
-- [ ] Create default business policies — visible in eBay Seller Hub > Business Policies
-- [ ] Sync 2-3 test products — listings appear on eBay with correct policies attached
-- [ ] Item specifics populated (Pokemon Character, Set, Grade, etc.)
-- [ ] Prices correct (compareAtPrice mapped to eBay listing price)
-- [ ] Update a product title in Shopify → change reflected on eBay within seconds
-- [ ] Dry-run / preview mode works before committing to live listings
-
----
-
-## Phase 3: Cross-Channel Inventory + Dashboard
-
-### 3.1 Sync Engine
-
-**File:** `app/lib/sync-engine.server.ts`
-
-Central orchestrator that coordinates across marketplace adapters.
-
-**Functions:**
-
-```typescript
-// Delist a product from all marketplaces (except the one where it sold)
-async delistFromAllExcept(shopId, productId, excludeMarketplace?): Promise<SyncResult[]>
-
-// Relist a product on all marketplaces where it was previously delisted
-async relistAll(shopId, productId): Promise<SyncResult[]>
-
-// Full reconciliation: compare Shopify inventory with all marketplace listings
-async reconcile(shopId): Promise<ReconciliationReport>
-
-// Sync a single product to all enabled marketplaces
-async syncProduct(shopId, product, metafields): Promise<SyncResult[]>
-```
-
-### 3.2 Order Webhook Handler
-
-**Update:** `app/routes/webhooks.orders.create.tsx`
-
-1. Parse order line items from payload
-2. For each line item, get the Shopify product ID
-3. Find all `MarketplaceListing` records for that product with status="active"
-4. For each active listing on a marketplace OTHER than where it sold:
-   - Call the appropriate adapter's `delistProduct()`
-   - Update listing status to "delisted"
-5. Log all actions to SyncLog
-
-### 3.3 Inventory Webhook Handler
-
-**Update:** `app/routes/webhooks.inventory.update.tsx`
-
-1. Get `inventory_item_id` and `available` quantity from payload
-2. Look up the Shopify product by inventory item ID (requires Admin API call)
-3. If `available === 0`: call `syncEngine.delistFromAllExcept(shopId, productId)`
-4. If `available > 0` and product has delisted listings: call `syncEngine.relistAll(shopId, productId)`
-5. Log to SyncLog
-
-### 3.4 eBay Inbound Notifications
-
-**File:** `app/routes/api.ebay-notifications.tsx`
-
-Receives eBay `ORDER_CONFIRMATION` webhook when a card sells on eBay.
-
-1. Verify notification signature (ECDSA)
-2. Extract listing ID from notification payload
-3. Look up `MarketplaceListing` by eBay listing ID
-4. Set Shopify inventory to 0 via Admin API (`inventoryAdjustQuantities` mutation)
-5. This triggers the `inventory_levels/update` webhook → which triggers cross-channel delist
-
-**eBay notification setup:**
-- Create a destination: `POST /sell/notification/v1/destination` (the app's webhook URL)
-- Validate via SHA-256 challenge-response
-- Subscribe: `POST /sell/notification/v1/subscription` (topic: `MARKETPLACE_ACCOUNT_DELETION`, `ORDER_CONFIRMATION`)
-
-### 3.5 Reconciliation Endpoint
-
-**File:** `app/routes/api.reconcile.tsx`
-
-Called by QStash cron (Upstash) every 15 minutes. Unauthenticated route secured by a shared secret header.
-
-1. Verify `Authorization: Bearer <QSTASH_SECRET>` header
-2. For each shop with active marketplace accounts:
-   a. Fetch all active Shopify products with inventory
-   b. Fetch all `MarketplaceListing` records with status="active"
-   c. For each listing where Shopify inventory = 0 but listing is still active → delist
-   d. For each product where Shopify inventory > 0 but no active listing → relist (if was previously synced)
-3. Log all corrections to SyncLog
-4. Return summary
-
-**QStash setup:**
-- Create a schedule in the Upstash dashboard
-- URL: `https://<app-url>/api/reconcile`
-- Schedule: every 15 minutes
-- Header: `Authorization: Bearer <QSTASH_SECRET>`
-
-### 3.6 Enhanced Dashboard
-
-**Update:** `app/routes/app._index.tsx`
-
-Add to the existing overview cards:
-
-1. **Activity log section:** Recent SyncLog entries (last 50), showing action, marketplace, product, status, timestamp. Filterable by marketplace and status.
-
-2. **Error section:** Products with status="error" across any marketplace. Each row shows: product title, marketplace, error message, "Retry" button.
-
-3. **Quick actions:**
-   - "Sync All" button → triggers `syncEngine.syncProduct()` for all unsynced products
-   - "Reconcile Now" button → triggers `syncEngine.reconcile()` manually
-   - "Export Activity Log" → download SyncLog as CSV
-
-### 3.7 Product Admin Block Extension
-
-**Directory:** `extensions/product-sync-status/`
-
-Generate via: `shopify app generate extension --template admin_block --name product-sync-status`
-
-Target: `admin.product-details.block.render`
-
-Shows on each product's detail page in Shopify admin:
-
-1. Per-marketplace status badges (Active / Not Listed / Error / Pending)
-2. Marketplace listing URLs (clickable links to eBay listing, etc.)
-3. Last sync timestamp per marketplace
-4. "Sync Now" button → calls app API to sync this specific product
-5. "Delist" button per marketplace → calls adapter to remove listing
-
-**Implementation notes:**
-- Extension uses Preact (64KB bundle limit)
-- Reads product metafields + calls app API for MarketplaceListing data
-- Must use `@shopify/ui-extensions-react/admin` components
-
-### 3.8 Verification
-
-- [ ] Create a test order in Shopify → product delisted from eBay within seconds
-- [ ] Manually set inventory to 0 → cross-channel delist fires
-- [ ] Set inventory back to 1 → relist fires on previously synced marketplaces
-- [ ] eBay sale notification → Shopify inventory set to 0 → cross-channel delist
-- [ ] Dashboard activity log shows all sync events
-- [ ] Dashboard error section shows failed syncs with retry
-- [ ] Reconciliation endpoint catches intentionally created drift
-- [ ] Product admin block shows correct status on product page
-
----
-
-## Phase 4: Whatnot + Helix Adapters
-
-### 4.1 Shopify Product Fetcher
-
-**File:** `app/lib/shopify-helpers.server.ts`
-
-Shared helper for fetching products with metafields from the Shopify Admin API. Used by all adapters and the CSV export.
-
-```typescript
-// Fetch a single product with all card metafields
-async getProductWithMetafields(admin, productId): Promise<{ product, metafields }>
-
-// Fetch all products with pagination and optional filters
-async getAllProducts(admin, filters?: { status?, productType?, collection? }): Promise<Product[]>
-
-// Extract card metafields from the metafield edges array into a flat key-value map
-extractCardMetafields(metafieldEdges): Record<string, string>
-```
-
-Port the pagination + metafield extraction logic from `yeti-shop/scripts/export-whatnot.js`.
-
-### 4.2 Whatnot Mapper
-
-**File:** `app/lib/mappers/whatnot-mapper.ts`
-
-Port from `yeti-shop/scripts/helpers/whatnot-columns.js`.
-
-```typescript
-// CSV column headers (fixed order, matches Whatnot bulk upload template)
-WHATNOT_HEADERS: string[]
-
-// Shipping profiles by product type
-SHIPPING_PROFILES: Record<string, string>
-
-// Build a plaintext description from card metafields
-buildWhatnotDescription(metafields, product): string
-
-// Map a Shopify product to a Whatnot CSV row array
-mapToWhatnotRow(product, metafields, variant, options?): string[]
-
-// Generate a complete CSV string from an array of products
-generateWhatnotCSV(products: ProductWithMetafields[]): string
-```
-
-**Improvements over yeti-shop version:**
-- Support raw singles (condition from metafield, not hardcoded "Graded")
-- Support sealed product (condition = "Brand New")
-- Richer descriptions: include year, rarity, population, centering, subgrades
-- Track which products have been exported via MarketplaceListing records
-
-### 4.3 Whatnot Adapter
-
-**File:** `app/lib/adapters/whatnot.server.ts`
-
-CSV-based adapter. Implements the adapter interface but generates CSV output instead of making API calls.
-
-```typescript
-// Generate CSV for products that haven't been exported yet
-async exportNew(shopId, admin, options?): Promise<{ csv: string, count: number }>
-
-// Generate CSV for all active products
-async exportAll(shopId, admin, options?): Promise<{ csv: string, count: number }>
-
-// Mark products as exported in MarketplaceListing
-async markExported(shopId, productIds): Promise<void>
-```
-
-**Options:** product type filter, price range, shipping profile override, collection filter.
-
-### 4.4 Whatnot Settings Page
-
-**Update:** `app/routes/app.whatnot.tsx`
-
-Replace placeholder with functional page:
-
-1. **Export controls:**
-   - "Export All Products" button → downloads CSV
-   - "Export New Only" button → downloads CSV for un-exported products only
-   - Product type checkboxes (Graded Card, Raw Single, Sealed Product)
-   - Price range filters (min/max)
-
-2. **Export history:**
-   - Table of past exports: date, product count, download link (if cached)
-
-3. **Stats:**
-   - Total exportable products
-   - Previously exported count
-   - New since last export
-
-### 4.5 Helix Adapter
-
-**File:** `app/lib/adapters/helix.server.ts`
-
-Stub adapter that will be implemented when Helix's API is available. For now, log-only.
-
-```typescript
-// Placeholder — returns "pending" status until API is available
-async listProduct(...): Promise<{ status: "pending", message: "Helix API not yet available" }>
-
-// Same for all other interface methods
-```
-
-### 4.6 Helix Mapper
-
-**File:** `app/lib/mappers/helix-mapper.ts`
-
-Maps Shopify product to the schema proposed in `docs/HELIX_PROPOSAL.md`.
-
-```typescript
-// Map Shopify product to Helix listing format
-mapToHelixListing(product, metafields: CardMetafields): HelixListing
-
-// The HelixListing type matches the proposed schema:
-// { title, description, price_cents, listing_type, condition, images, card: { ... }, external_refs: { ... } }
-```
-
-This mapper can be built and tested now even without the API — it validates that our metafield data maps cleanly to the proposed schema.
-
-### 4.7 Helix Settings Page
-
-**Update:** `app/routes/app.helix.tsx`
-
-Enhance with:
-1. Connection status (placeholder until API exists)
-2. Preview of how products would appear in Helix's format (uses helix-mapper to show a sample product's mapped data)
-3. Link to the proposal document
-
-### 4.8 Verification
-
-- [ ] Whatnot CSV export downloads from app UI
-- [ ] CSV includes graded cards, raw singles, and sealed product
-- [ ] "Export New Only" correctly skips previously exported products
-- [ ] Export history visible in the UI
-- [ ] Helix mapper correctly transforms sample products (unit test)
-- [ ] Helix adapter gracefully returns pending status
-
----
-
-## Phase 5: Migration + Polish
-
-### 5.1 Marketplace Connect Migration
-
-**File:** `app/routes/app.ebay.tsx` (migration section)
-
-Add a migration workflow to the eBay settings page:
-
-1. **Audit:** Fetch all existing eBay listings (via `GET /sell/inventory/v1/inventory_item?limit=100` with pagination). Show a table of listings not yet tracked in MarketplaceListing.
-
-2. **Import:** For each existing eBay listing, create a MarketplaceListing record with the existing listing ID + offer ID. This puts them under the app's management without recreating them.
-
-3. **Re-sync:** For listings that need policy updates, use `PUT /sell/inventory/v1/offer/{offerId}` to attach the correct business policies.
-
-4. **Verify:** Show a side-by-side comparison: Marketplace Connect listings vs app-managed listings.
-
-5. **Disable:** Once all listings are migrated, provide instructions to disable Marketplace Connect's auto-list feature.
-
-### 5.2 Sync Rules UI
-
-**File:** `app/routes/app.sync-rules.tsx` (new route)
-
-Add to nav as a sub-page under each marketplace, or as a shared settings page.
-
-**Rules per marketplace:**
-- **Product type filter:** Which types to sync (Graded Card, Raw Single, Curated Lot, Sealed Product)
-- **Collection filter:** Only sync products in specific collections
-- **Tag filter:** Include/exclude by tag
-- **Price range:** Min/max price for sync
-- **Auto-sync new products:** Toggle — when a product is created, auto-sync to this marketplace
-
-Store in `MarketplaceAccount.settings` JSON:
-```json
-{
-  "syncRules": {
-    "productTypes": ["Graded Card", "Raw Single"],
-    "collections": ["graded-cards", "japanese-cards"],
-    "excludeTags": ["do-not-sync"],
-    "priceMin": null,
-    "priceMax": null,
-    "autoSyncNew": true
+`;
+
+/**
+ * Extract card metafields from a product node that used inline metafield queries.
+ * Converts { pokemon: { value: "Charizard" }, ... } to { pokemon: "Charizard", ... }
+ */
+export function extractCardMetafields(productNode: Record<string, unknown>): CardMetafields {
+  const result: CardMetafields = {};
+  for (const key of CARD_METAFIELD_KEYS) {
+    const field = productNode[key] as { value: string } | null | undefined;
+    if (field?.value) {
+      result[key] = field.value;
+    }
   }
+  return result;
 }
-```
 
-### 5.3 Price Rules
+/**
+ * Fetch a single product with all card metafields.
+ */
+export async function getProductWithMetafields(
+  admin: { graphql: (query: string, options?: { variables: Record<string, unknown> }) => Promise<Response> },
+  productId: string,
+) {
+  const response = await admin.graphql(PRODUCT_WITH_METAFIELDS_QUERY, {
+    variables: { id: productId },
+  });
+  const { data } = await response.json();
+  const product = data.product;
+  if (!product) return null;
 
-**File:** `app/routes/app.price-rules.tsx` (new route) or section within each marketplace page
+  const metafields = extractCardMetafields(product);
+  const variant = product.variants.edges[0]?.node ?? null;
+  const images = (product.images?.edges ?? []).map(
+    (e: { node: { url: string } }) => e.node.url,
+  );
 
-Configure per-marketplace pricing:
-- **eBay:** Use `compareAtPrice` (market comp, default) or `variant.price` + markup %
-- **Whatnot:** Ceil to nearest dollar (default) or custom markup
-- **Helix:** Use `variant.price` (default) or custom
+  return { product, metafields, variant, images };
+}
 
-Store in `MarketplaceAccount.settings`:
-```json
-{
-  "priceRules": {
-    "source": "compareAtPrice",
-    "markupPercent": 0,
-    "roundUp": false
+export interface ProductWithMetafields {
+  product: Record<string, unknown>;
+  metafields: CardMetafields;
+  variant: Record<string, unknown> | null;
+  images: string[];
+}
+
+/**
+ * Fetch all products with pagination and optional query filter.
+ * Yields pages of products for memory efficiency.
+ */
+export async function getAllProducts(
+  admin: { graphql: (query: string, options?: { variables: Record<string, unknown> }) => Promise<Response> },
+  options?: { query?: string; pageSize?: number },
+): Promise<ProductWithMetafields[]> {
+  const pageSize = options?.pageSize ?? 50;
+  const results: ProductWithMetafields[] = [];
+  let after: string | null = null;
+  let hasNextPage = true;
+
+  while (hasNextPage) {
+    const response = await admin.graphql(ALL_PRODUCTS_QUERY, {
+      variables: { first: pageSize, after, query: options?.query ?? null },
+    });
+    const { data } = await response.json();
+
+    for (const edge of data.products.edges) {
+      const node = edge.node;
+      const metafields = extractCardMetafields(node);
+      const variant = node.variants.edges[0]?.node ?? null;
+      const images = (node.images?.edges ?? []).map(
+        (e: { node: { url: string } }) => e.node.url,
+      );
+      results.push({ product: node, metafields, variant, images });
+    }
+
+    hasNextPage = data.products.pageInfo.hasNextPage;
+    after = data.products.pageInfo.endCursor;
   }
+
+  return results;
 }
 ```
 
-### 5.4 App Store Preparation
+- [ ] **Step 2: Verify**
 
-Before submitting to the Shopify App Store:
+Run: `npm run typecheck`
+Expected: No type errors.
 
-- [ ] Privacy policy page (required)
-- [ ] GDPR compliance handlers (already built: data_request, redact, shop/redact)
-- [ ] App listing copy: name, tagline, description, screenshots
-- [ ] Error handling: graceful failures, user-facing error messages
-- [ ] Rate limiting: respect Shopify and eBay API limits
-- [ ] Onboarding flow: first-time setup wizard
-- [ ] Help/documentation page within the app
+- [ ] **Step 3: Commit**
 
-### 5.5 Verification
-
-- [ ] Existing Marketplace Connect listings imported into app's management
-- [ ] Policies updated on imported listings
-- [ ] Sync rules filter products correctly per marketplace
-- [ ] Price rules apply correct pricing per marketplace
-- [ ] Marketplace Connect disabled with no regressions
-
----
-
-## File Creation Summary
-
-### Phase 2 — New files
-```
-app/lib/ebay-client.server.ts          eBay OAuth + API transport
-app/lib/ebay-policies.server.ts        Business policy CRUD via Account API
-app/lib/mappers/ebay-mapper.ts         Shopify → eBay data transform
-app/lib/adapters/ebay.server.ts        eBay Inventory API adapter
-app/routes/api.ebay-callback.tsx       eBay OAuth callback route
-```
-
-### Phase 2 — Updated files
-```
-app/routes/app.ebay.tsx                Functional OAuth + policies + sync UI
-app/routes/webhooks.products.update.tsx  Wire to eBay adapter
-app/routes/webhooks.products.create.tsx  Wire to eBay adapter
-.env.example (create)                   EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, etc.
-```
-
-### Phase 3 — New files
-```
-app/lib/sync-engine.server.ts          Cross-channel orchestrator
-app/routes/api.ebay-notifications.tsx  eBay order webhook receiver
-app/routes/api.reconcile.tsx           QStash cron endpoint
-extensions/product-sync-status/        Admin block extension (generated)
-```
-
-### Phase 3 — Updated files
-```
-app/routes/webhooks.orders.create.tsx    Wire to sync engine
-app/routes/webhooks.inventory.update.tsx  Wire to sync engine
-app/routes/app._index.tsx                Activity log, errors, quick actions
-```
-
-### Phase 4 — New files
-```
-app/lib/shopify-helpers.server.ts      Product fetcher + metafield extraction
-app/lib/mappers/whatnot-mapper.ts      Shopify → Whatnot CSV transform
-app/lib/mappers/helix-mapper.ts        Shopify → Helix listing transform
-app/lib/adapters/whatnot.server.ts     Whatnot CSV export adapter
-app/lib/adapters/helix.server.ts       Helix stub adapter
-```
-
-### Phase 4 — Updated files
-```
-app/routes/app.whatnot.tsx             Functional CSV export UI
-app/routes/app.helix.tsx               Enhanced preview + status
-```
-
-### Phase 5 — New files
-```
-app/routes/app.sync-rules.tsx          Sync rules configuration UI
-app/routes/app.price-rules.tsx         Per-marketplace pricing rules UI
-```
-
-### Phase 5 — Updated files
-```
-app/routes/app.ebay.tsx                Migration workflow section
-app/routes/app.tsx                     Nav updates for new pages
+```bash
+git add app/lib/shopify-helpers.server.ts
+git commit -m "feat: add Shopify product fetcher with card metafield extraction"
 ```
 
 ---
 
-## Dependencies & Blockers
+### Task 3: eBay Business Policy Management
 
-| Work Item | Depends On | Blocked By External? |
-|-----------|-----------|---------------------|
-| eBay OAuth client | eBay developer app with Sell API scopes | Need to verify app scopes in eBay portal |
-| eBay business policies | eBay OAuth working | No |
-| eBay adapter | OAuth + policies | No |
-| eBay notifications | eBay OAuth + working adapter | No |
-| Webhook handlers | eBay adapter | No |
-| Reconciliation | Sync engine + at least one adapter | No |
-| Whatnot CSV | Shopify product fetcher | No |
-| Whatnot API | Whatnot Seller API access | Yes — Developer Preview closed |
-| Helix API adapter | Helix building their API | Yes — waiting on proposal response |
-| Helix mapper | Nothing (can build against proposed schema) | No |
-| Admin block extension | At least one working adapter | No |
-| Migration | eBay adapter fully working | No |
-| App Store submission | All core features working | No |
+**Files:**
+- Create: `app/lib/ebay-policies.server.ts`
+
+Manages eBay business policies (fulfillment, payment, return) via the Account API v1. Policy IDs are stored in `MarketplaceAccount.settings` JSON.
+
+- [ ] **Step 1: Create the module**
+
+Create `app/lib/ebay-policies.server.ts`:
+
+```typescript
+import type { MarketplaceAccount } from "@prisma/client";
+import { ebayApiCall } from "./ebay-client.server";
+
+const MARKETPLACE_ID = "EBAY_US";
+
+interface Policy {
+  id: string;
+  name: string;
+  description?: string;
+}
+
+interface PolicySet {
+  fulfillment: Policy[];
+  payment: Policy[];
+  return: Policy[];
+}
+
+/**
+ * Fetch all existing business policies from the seller's eBay account.
+ */
+export async function getExistingPolicies(account: MarketplaceAccount): Promise<PolicySet> {
+  const types = ["fulfillment", "payment", "return"] as const;
+  const result: PolicySet = { fulfillment: [], payment: [], return: [] };
+
+  for (const type of types) {
+    const { response } = await ebayApiCall(
+      "GET",
+      `/sell/account/v1/${type}_policy?marketplace_id=${MARKETPLACE_ID}`,
+      null,
+      account,
+    );
+
+    if (response.ok) {
+      const data = await response.json();
+      const policies = data[`${type}Policies`] ?? [];
+      result[type] = policies.map((p: Record<string, string>) => ({
+        id: p[`${type}PolicyId`],
+        name: p.name,
+        description: p.description,
+      }));
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Create a fulfillment policy with Card Yeti defaults.
+ * USPS Ground Advantage + First Class + Priority, 1 day handling, free shipping over $75.
+ */
+export async function createFulfillmentPolicy(
+  account: MarketplaceAccount,
+  config?: { name?: string },
+): Promise<{ policyId: string }> {
+  const body = {
+    name: config?.name ?? "Card Yeti - Standard Shipping",
+    description: "USPS shipping with free shipping over $75",
+    marketplaceId: MARKETPLACE_ID,
+    categoryTypes: [{ name: "ALL_EXCLUDING_MOTORS_VEHICLES" }],
+    handlingTime: { value: 1, unit: "DAY" },
+    shippingOptions: [
+      {
+        optionType: "DOMESTIC",
+        costType: "CALCULATED",
+        shippingServices: [
+          {
+            shippingCarrierCode: "USPS",
+            shippingServiceCode: "USPSGroundAdvantage",
+            sortOrder: 1,
+            freeShipping: false,
+          },
+          {
+            shippingCarrierCode: "USPS",
+            shippingServiceCode: "USPSFirstClass",
+            sortOrder: 2,
+            freeShipping: false,
+          },
+          {
+            shippingCarrierCode: "USPS",
+            shippingServiceCode: "USPSPriority",
+            sortOrder: 3,
+            freeShipping: false,
+          },
+        ],
+      },
+    ],
+  };
+
+  const { response } = await ebayApiCall(
+    "POST",
+    "/sell/account/v1/fulfillment_policy",
+    body,
+    account,
+  );
+
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(`Failed to create fulfillment policy: ${JSON.stringify(err)}`);
+  }
+
+  const data = await response.json();
+  return { policyId: data.fulfillmentPolicyId };
+}
+
+/**
+ * Create a payment policy — immediate payment required, eBay managed payments.
+ */
+export async function createPaymentPolicy(
+  account: MarketplaceAccount,
+  config?: { name?: string },
+): Promise<{ policyId: string }> {
+  const body = {
+    name: config?.name ?? "Card Yeti - Immediate Payment",
+    description: "Immediate payment required via eBay managed payments",
+    marketplaceId: MARKETPLACE_ID,
+    categoryTypes: [{ name: "ALL_EXCLUDING_MOTORS_VEHICLES" }],
+    immediatePay: true,
+    paymentMethods: [{ paymentMethodType: "PERSONAL_CHECK" }],
+  };
+
+  const { response } = await ebayApiCall(
+    "POST",
+    "/sell/account/v1/payment_policy",
+    body,
+    account,
+  );
+
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(`Failed to create payment policy: ${JSON.stringify(err)}`);
+  }
+
+  const data = await response.json();
+  return { policyId: data.paymentPolicyId };
+}
+
+/**
+ * Create a return policy — 30-day returns, buyer pays return shipping.
+ */
+export async function createReturnPolicy(
+  account: MarketplaceAccount,
+  config?: { name?: string },
+): Promise<{ policyId: string }> {
+  const body = {
+    name: config?.name ?? "Card Yeti - 30 Day Returns",
+    description: "30-day returns accepted, buyer pays return shipping",
+    marketplaceId: MARKETPLACE_ID,
+    categoryTypes: [{ name: "ALL_EXCLUDING_MOTORS_VEHICLES" }],
+    returnsAccepted: true,
+    returnPeriod: { value: 30, unit: "DAY" },
+    returnShippingCostPayer: "BUYER",
+    refundMethod: "MONEY_BACK",
+  };
+
+  const { response } = await ebayApiCall(
+    "POST",
+    "/sell/account/v1/return_policy",
+    body,
+    account,
+  );
+
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(`Failed to create return policy: ${JSON.stringify(err)}`);
+  }
+
+  const data = await response.json();
+  return { policyId: data.returnPolicyId };
+}
+```
+
+- [ ] **Step 2: Verify**
+
+Run: `npm run typecheck`
+Expected: No type errors.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add app/lib/ebay-policies.server.ts
+git commit -m "feat: add eBay business policy management via Account API"
+```
+
+---
+
+### Task 4: eBay Data Mapper (with tests)
+
+**Files:**
+- Create: `app/lib/mappers/ebay-mapper.ts`
+- Create: `app/lib/mappers/ebay-mapper.test.ts`
+
+Transforms a Shopify product + card metafields into eBay Inventory API format. Maps card metafields to eBay item specifics.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `app/lib/mappers/ebay-mapper.test.ts`:
+
+```typescript
+import { describe, it, expect } from "vitest";
+import {
+  mapToInventoryItem,
+  mapToOffer,
+  buildItemSpecifics,
+} from "./ebay-mapper";
+import type { CardMetafields } from "../shopify-helpers.server";
+
+const GRADED_METAFIELDS: CardMetafields = {
+  pokemon: "Charizard",
+  set_name: "Base Set",
+  number: "4/102",
+  grading_company: "PSA",
+  grade: "9",
+  cert_number: "12345678",
+  language: "English",
+  year: "1999",
+  rarity: "Holo Rare",
+};
+
+const RAW_METAFIELDS: CardMetafields = {
+  pokemon: "Umbreon",
+  set_name: "Neo Discovery",
+  number: "32/75",
+  language: "English",
+  year: "2001",
+  rarity: "Rare",
+  condition: "Near Mint",
+};
+
+const PRODUCT = {
+  title: "Charizard Holo - Base Set #4/102 PSA 9",
+  descriptionHtml: "<p>Beautiful holo bleed.</p>",
+};
+
+const VARIANT = {
+  price: "855.00",
+  compareAtPrice: "900.00",
+  sku: "PSA-12345678",
+  inventoryQuantity: 1,
+};
+
+describe("buildItemSpecifics", () => {
+  it("maps graded card metafields to eBay name-value pairs", () => {
+    const aspects = buildItemSpecifics(GRADED_METAFIELDS);
+    expect(aspects["Pokémon Character"]).toEqual(["Charizard"]);
+    expect(aspects["Set"]).toEqual(["Base Set"]);
+    expect(aspects["Card Number"]).toEqual(["4/102"]);
+    expect(aspects["Professional Grader"]).toEqual(["PSA"]);
+    expect(aspects["Grade"]).toEqual(["9"]);
+    expect(aspects["Certification Number"]).toEqual(["12345678"]);
+    expect(aspects["Language"]).toEqual(["English"]);
+    expect(aspects["Year Manufactured"]).toEqual(["1999"]);
+    expect(aspects["Rarity"]).toEqual(["Holo Rare"]);
+  });
+
+  it("omits absent metafields", () => {
+    const aspects = buildItemSpecifics(RAW_METAFIELDS);
+    expect(aspects["Professional Grader"]).toBeUndefined();
+    expect(aspects["Grade"]).toBeUndefined();
+    expect(aspects["Certification Number"]).toBeUndefined();
+    expect(aspects["Card Condition"]).toEqual(["Near Mint"]);
+  });
+});
+
+describe("mapToInventoryItem", () => {
+  it("maps a graded card to eBay inventory item shape", () => {
+    const item = mapToInventoryItem(PRODUCT, GRADED_METAFIELDS);
+    expect(item.condition).toBe("USED_EXCELLENT");
+    expect(item.product.title).toBe(PRODUCT.title);
+    expect(item.product.aspects["Pokémon Character"]).toEqual(["Charizard"]);
+    expect(item.availability.shipToLocationAvailability.quantity).toBe(1);
+  });
+
+  it("maps a raw card with condition notes", () => {
+    const item = mapToInventoryItem(
+      { ...PRODUCT, title: "Umbreon - Neo Discovery" },
+      RAW_METAFIELDS,
+    );
+    expect(item.condition).toBe("USED_EXCELLENT");
+  });
+});
+
+describe("mapToOffer", () => {
+  it("uses compareAtPrice for eBay listing price", () => {
+    const offer = mapToOffer(PRODUCT, VARIANT, GRADED_METAFIELDS, {
+      fulfillmentPolicyId: "fp-1",
+      paymentPolicyId: "pp-1",
+      returnPolicyId: "rp-1",
+    });
+    expect(offer.pricingSummary.price.value).toBe("900.00");
+    expect(offer.pricingSummary.price.currency).toBe("USD");
+    expect(offer.sku).toBe("PSA-12345678");
+    expect(offer.listingPolicies.fulfillmentPolicyId).toBe("fp-1");
+  });
+
+  it("falls back to variant.price / 0.95 when no compareAtPrice", () => {
+    const offer = mapToOffer(
+      PRODUCT,
+      { ...VARIANT, compareAtPrice: null },
+      GRADED_METAFIELDS,
+      { fulfillmentPolicyId: "fp-1", paymentPolicyId: "pp-1", returnPolicyId: "rp-1" },
+    );
+    // 855 / 0.95 = 900
+    expect(offer.pricingSummary.price.value).toBe("900.00");
+  });
+});
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `npx vitest run app/lib/mappers/ebay-mapper.test.ts`
+Expected: FAIL — module not found.
+
+- [ ] **Step 3: Implement the mapper**
+
+Create `app/lib/mappers/ebay-mapper.ts`:
+
+```typescript
+import type { CardMetafields } from "../shopify-helpers.server";
+
+/**
+ * Metafield key → eBay item specific name mapping.
+ */
+const ASPECT_MAP: Record<string, string> = {
+  pokemon: "Pokémon Character",
+  set_name: "Set",
+  number: "Card Number",
+  grading_company: "Professional Grader",
+  grade: "Grade",
+  cert_number: "Certification Number",
+  language: "Language",
+  year: "Year Manufactured",
+  rarity: "Rarity",
+  condition: "Card Condition",
+};
+
+// Pokemon TCG category on eBay
+const POKEMON_CATEGORY_ID = "183454";
+
+/**
+ * Build eBay item specifics (aspects) from card metafields.
+ * Each aspect is a name → string[] mapping.
+ */
+export function buildItemSpecifics(
+  metafields: CardMetafields,
+): Record<string, string[]> {
+  const aspects: Record<string, string[]> = {};
+
+  for (const [key, ebayName] of Object.entries(ASPECT_MAP)) {
+    const value = metafields[key as keyof CardMetafields];
+    if (value) {
+      aspects[ebayName] = [value];
+    }
+  }
+
+  return aspects;
+}
+
+/**
+ * Determine eBay condition enum from card metafields.
+ * Graded cards are always USED_EXCELLENT. Raw cards map by condition text.
+ */
+function mapCondition(metafields: CardMetafields): string {
+  if (metafields.grading_company && metafields.grade) {
+    return "USED_EXCELLENT";
+  }
+
+  const condition = metafields.condition?.toLowerCase() ?? "";
+  if (condition.includes("near mint") || condition.includes("nm")) return "USED_EXCELLENT";
+  if (condition.includes("lightly played") || condition.includes("lp")) return "USED_VERY_GOOD";
+  if (condition.includes("moderately played") || condition.includes("mp")) return "USED_GOOD";
+  if (condition.includes("heavily played") || condition.includes("hp")) return "USED_ACCEPTABLE";
+
+  return "USED_EXCELLENT";
+}
+
+export interface EbayInventoryItem {
+  availability: { shipToLocationAvailability: { quantity: number } };
+  condition: string;
+  conditionDescription?: string;
+  product: {
+    title: string;
+    description: string;
+    imageUrls: string[];
+    aspects: Record<string, string[]>;
+  };
+}
+
+/**
+ * Map a Shopify product to eBay inventory item format.
+ */
+export function mapToInventoryItem(
+  product: { title: string; descriptionHtml?: string },
+  metafields: CardMetafields,
+  images?: string[],
+): EbayInventoryItem {
+  const aspects = buildItemSpecifics(metafields);
+
+  // Build condition description from metafields
+  const conditionParts: string[] = [];
+  if (metafields.grading_company && metafields.grade) {
+    conditionParts.push(`${metafields.grading_company} ${metafields.grade}`);
+    if (metafields.cert_number) conditionParts.push(`Cert: ${metafields.cert_number}`);
+  }
+  if (metafields.condition) conditionParts.push(metafields.condition);
+
+  return {
+    availability: {
+      shipToLocationAvailability: { quantity: 1 },
+    },
+    condition: mapCondition(metafields),
+    conditionDescription: conditionParts.join(" | ") || undefined,
+    product: {
+      title: product.title,
+      description: product.descriptionHtml ?? product.title,
+      imageUrls: images ?? [],
+      aspects,
+    },
+  };
+}
+
+export interface EbayPolicyIds {
+  fulfillmentPolicyId: string;
+  paymentPolicyId: string;
+  returnPolicyId: string;
+}
+
+export interface EbayOffer {
+  sku: string;
+  marketplaceId: string;
+  format: string;
+  availableQuantity: number;
+  categoryId: string;
+  listingPolicies: EbayPolicyIds;
+  pricingSummary: {
+    price: { value: string; currency: string };
+  };
+}
+
+/**
+ * Map a Shopify product to eBay offer format.
+ * Price: uses compareAtPrice (market comp). Falls back to variant.price / 0.95.
+ */
+export function mapToOffer(
+  product: { title: string },
+  variant: { price: string; compareAtPrice: string | null; sku: string },
+  metafields: CardMetafields,
+  policyIds: EbayPolicyIds,
+): EbayOffer {
+  const compareAt = variant.compareAtPrice
+    ? parseFloat(variant.compareAtPrice)
+    : parseFloat(variant.price) / 0.95;
+
+  return {
+    sku: variant.sku || `CY-${Date.now()}`,
+    marketplaceId: "EBAY_US",
+    format: "FIXED_PRICE",
+    availableQuantity: 1,
+    categoryId: POKEMON_CATEGORY_ID,
+    listingPolicies: policyIds,
+    pricingSummary: {
+      price: {
+        value: compareAt.toFixed(2),
+        currency: "USD",
+      },
+    },
+  };
+}
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `npx vitest run app/lib/mappers/ebay-mapper.test.ts`
+Expected: All tests PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add app/lib/mappers/ebay-mapper.ts app/lib/mappers/ebay-mapper.test.ts
+git commit -m "feat: add eBay data mapper with item specifics mapping and tests"
+```
+
+---
+
+### Task 5: eBay Adapter
+
+**Files:**
+- Create: `app/lib/adapters/ebay.server.ts`
+
+Implements the marketplace adapter using the eBay Inventory API. Uses `ebayApiCall` from `ebay-client.server.ts` for authenticated requests and `ebay-mapper.ts` for data transforms.
+
+- [ ] **Step 1: Create the adapter**
+
+Create `app/lib/adapters/ebay.server.ts`:
+
+```typescript
+import type { MarketplaceAccount } from "@prisma/client";
+import { ebayApiCall } from "../ebay-client.server";
+import {
+  mapToInventoryItem,
+  mapToOffer,
+  type EbayPolicyIds,
+} from "../mappers/ebay-mapper";
+import type { CardMetafields } from "../shopify-helpers.server";
+
+interface ListResult {
+  marketplaceId: string;
+  offerId: string;
+  url: string;
+  status: "active" | "error";
+  error?: string;
+}
+
+/**
+ * Create or update an inventory item, create an offer, and publish it.
+ * Returns the eBay listing ID and offer ID for storage in MarketplaceListing.
+ */
+export async function listProduct(
+  product: { id: string; title: string; descriptionHtml?: string },
+  variant: { price: string; compareAtPrice: string | null; sku: string },
+  metafields: CardMetafields,
+  images: string[],
+  account: MarketplaceAccount,
+): Promise<ListResult> {
+  const settings = (account.settings ?? {}) as Record<string, string>;
+  const policyIds: EbayPolicyIds = {
+    fulfillmentPolicyId: settings.fulfillmentPolicyId ?? "",
+    paymentPolicyId: settings.paymentPolicyId ?? "",
+    returnPolicyId: settings.returnPolicyId ?? "",
+  };
+
+  const sku = variant.sku || `CY-${product.id.split("/").pop()}`;
+  const inventoryItem = mapToInventoryItem(product, metafields, images);
+  const offer = mapToOffer(product, variant, metafields, policyIds);
+
+  // Step 1: Create or replace inventory item
+  const { response: itemResponse } = await ebayApiCall(
+    "PUT",
+    `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
+    inventoryItem,
+    account,
+  );
+
+  if (!itemResponse.ok && itemResponse.status !== 204) {
+    const err = await itemResponse.text();
+    return { marketplaceId: "", offerId: "", url: "", status: "error", error: err };
+  }
+
+  // Step 2: Create offer
+  const { response: offerResponse } = await ebayApiCall(
+    "POST",
+    "/sell/inventory/v1/offer",
+    offer,
+    account,
+  );
+
+  if (!offerResponse.ok) {
+    const err = await offerResponse.text();
+    return { marketplaceId: "", offerId: "", url: "", status: "error", error: err };
+  }
+
+  const offerData = await offerResponse.json();
+  const offerId = offerData.offerId;
+
+  // Step 3: Publish offer
+  const { response: publishResponse } = await ebayApiCall(
+    "POST",
+    `/sell/inventory/v1/offer/${offerId}/publish`,
+    null,
+    account,
+  );
+
+  if (!publishResponse.ok) {
+    const err = await publishResponse.text();
+    return { marketplaceId: "", offerId, url: "", status: "error", error: err };
+  }
+
+  const publishData = await publishResponse.json();
+  const listingId = publishData.listingId;
+  const url = `https://www.ebay.com/itm/${listingId}`;
+
+  return { marketplaceId: listingId, offerId, url, status: "active" };
+}
+
+/**
+ * Update an existing eBay listing (revise inventory item + offer).
+ */
+export async function updateProduct(
+  sku: string,
+  offerId: string,
+  product: { title: string; descriptionHtml?: string },
+  variant: { price: string; compareAtPrice: string | null; sku: string },
+  metafields: CardMetafields,
+  images: string[],
+  account: MarketplaceAccount,
+): Promise<{ status: "active" | "error"; error?: string }> {
+  const inventoryItem = mapToInventoryItem(product, metafields, images);
+
+  const { response: itemResponse } = await ebayApiCall(
+    "PUT",
+    `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
+    inventoryItem,
+    account,
+  );
+
+  if (!itemResponse.ok && itemResponse.status !== 204) {
+    const err = await itemResponse.text();
+    return { status: "error", error: err };
+  }
+
+  // Update offer price if changed
+  const settings = (account.settings ?? {}) as Record<string, string>;
+  const offer = mapToOffer(product, variant, metafields, {
+    fulfillmentPolicyId: settings.fulfillmentPolicyId ?? "",
+    paymentPolicyId: settings.paymentPolicyId ?? "",
+    returnPolicyId: settings.returnPolicyId ?? "",
+  });
+
+  const { response: offerResponse } = await ebayApiCall(
+    "PUT",
+    `/sell/inventory/v1/offer/${offerId}`,
+    offer,
+    account,
+  );
+
+  if (!offerResponse.ok) {
+    const err = await offerResponse.text();
+    return { status: "error", error: err };
+  }
+
+  return { status: "active" };
+}
+
+/**
+ * Withdraw (delist) an eBay offer.
+ */
+export async function delistProduct(
+  offerId: string,
+  account: MarketplaceAccount,
+): Promise<{ status: "delisted" | "error"; error?: string }> {
+  const { response } = await ebayApiCall(
+    "POST",
+    `/sell/inventory/v1/offer/${offerId}/withdraw`,
+    null,
+    account,
+  );
+
+  // 404 = already withdrawn — treat as success
+  if (response.ok || response.status === 404) {
+    return { status: "delisted" };
+  }
+
+  const err = await response.text();
+  return { status: "error", error: err };
+}
+
+/**
+ * Update price and/or quantity for up to 25 offers.
+ */
+export async function bulkUpdatePriceQuantity(
+  updates: { offerId: string; sku: string; price?: string; quantity?: number }[],
+  account: MarketplaceAccount,
+): Promise<{ successCount: number; errorCount: number }> {
+  const requests = updates.map((u) => ({
+    offerId: u.offerId,
+    sku: u.sku,
+    ...(u.price && {
+      price: { value: u.price, currency: "USD" },
+    }),
+    ...(u.quantity !== undefined && {
+      availableQuantity: u.quantity,
+    }),
+  }));
+
+  const { response } = await ebayApiCall(
+    "POST",
+    "/sell/inventory/v1/bulk_update_price_quantity",
+    { requests },
+    account,
+  );
+
+  if (!response.ok) {
+    return { successCount: 0, errorCount: updates.length };
+  }
+
+  const data = await response.json();
+  const errors = (data.responses ?? []).filter(
+    (r: { statusCode: number }) => r.statusCode !== 200,
+  );
+
+  return {
+    successCount: updates.length - errors.length,
+    errorCount: errors.length,
+  };
+}
+```
+
+- [ ] **Step 2: Verify**
+
+Run: `npm run typecheck`
+Expected: No type errors.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add app/lib/adapters/ebay.server.ts
+git commit -m "feat: add eBay adapter for Inventory API (list, update, delist, bulk)"
+```
+
+---
+
+### Task 6: Wire Product Webhook Handlers
+
+**Files:**
+- Modify: `app/routes/webhooks.products.create.tsx`
+- Modify: `app/routes/webhooks.products.update.tsx`
+
+Replace the stubs with functional handlers that sync product changes to eBay.
+
+- [ ] **Step 1: Implement products.update webhook**
+
+Replace `app/routes/webhooks.products.update.tsx`:
+
+```typescript
+import type { ActionFunctionArgs } from "react-router";
+import { authenticate } from "../shopify.server";
+import db from "../db.server";
+import { getProductWithMetafields } from "../lib/shopify-helpers.server";
+import * as ebayAdapter from "../lib/adapters/ebay.server";
+
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const { shop, topic, payload, admin } = await authenticate.webhook(request);
+
+  console.log(`Received ${topic} webhook for ${shop}`);
+
+  if (!admin) {
+    console.error("No admin client available in webhook context");
+    return new Response();
+  }
+
+  // Find eBay account for this shop
+  const ebayAccount = await db.marketplaceAccount.findUnique({
+    where: { shopId_marketplace: { shopId: shop, marketplace: "ebay" } },
+  });
+
+  if (!ebayAccount) {
+    console.log("No eBay account connected — skipping sync");
+    return new Response();
+  }
+
+  const productGid = `gid://shopify/Product/${payload.id}`;
+
+  // Fetch full product data with metafields (webhook payload may be partial)
+  const productData = await getProductWithMetafields(admin, productGid);
+  if (!productData) {
+    console.log(`Product ${payload.id} not found — may have been deleted`);
+    return new Response();
+  }
+
+  const { product, metafields, variant } = productData;
+  if (!variant) {
+    console.log(`Product ${payload.id} has no variants — skipping`);
+    return new Response();
+  }
+
+  const { images } = productData;
+
+  // Check if listing already exists
+  const existingListing = await db.marketplaceListing.findUnique({
+    where: {
+      shopId_shopifyProductId_marketplace: {
+        shopId: shop,
+        shopifyProductId: productGid,
+        marketplace: "ebay",
+      },
+    },
+  });
+
+  try {
+    if (existingListing?.offerId) {
+      // Update existing listing
+      const result = await ebayAdapter.updateProduct(
+        variant.sku,
+        existingListing.offerId,
+        product as { title: string; descriptionHtml?: string },
+        variant as { price: string; compareAtPrice: string | null; sku: string },
+        metafields,
+        images,
+        ebayAccount,
+      );
+
+      await db.marketplaceListing.update({
+        where: { id: existingListing.id },
+        data: {
+          status: result.status,
+          errorMessage: result.error ?? null,
+          lastSyncedAt: new Date(),
+        },
+      });
+
+      await db.syncLog.create({
+        data: {
+          shopId: shop,
+          marketplace: "ebay",
+          action: "update",
+          productId: productGid,
+          status: result.status === "active" ? "success" : "error",
+          details: JSON.stringify({ title: product.title, error: result.error }),
+        },
+      });
+    } else {
+      // Create new listing
+      const result = await ebayAdapter.listProduct(
+        product as { id: string; title: string; descriptionHtml?: string },
+        variant as { price: string; compareAtPrice: string | null; sku: string },
+        metafields,
+        images,
+        ebayAccount,
+      );
+
+      await db.marketplaceListing.upsert({
+        where: {
+          shopId_shopifyProductId_marketplace: {
+            shopId: shop,
+            shopifyProductId: productGid,
+            marketplace: "ebay",
+          },
+        },
+        create: {
+          shopId: shop,
+          shopifyProductId: productGid,
+          marketplace: "ebay",
+          marketplaceId: result.marketplaceId,
+          offerId: result.offerId,
+          status: result.status,
+          errorMessage: result.error ?? null,
+          lastSyncedAt: new Date(),
+        },
+        update: {
+          marketplaceId: result.marketplaceId,
+          offerId: result.offerId,
+          status: result.status,
+          errorMessage: result.error ?? null,
+          lastSyncedAt: new Date(),
+        },
+      });
+
+      await db.syncLog.create({
+        data: {
+          shopId: shop,
+          marketplace: "ebay",
+          action: "list",
+          productId: productGid,
+          status: result.status === "active" ? "success" : "error",
+          details: JSON.stringify({ title: product.title, error: result.error }),
+        },
+      });
+    }
+  } catch (err) {
+    console.error(`eBay sync failed for product ${payload.id}:`, err);
+    await db.syncLog.create({
+      data: {
+        shopId: shop,
+        marketplace: "ebay",
+        action: existingListing ? "update" : "list",
+        productId: productGid,
+        status: "error",
+        details: JSON.stringify({
+          title: product.title,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      },
+    });
+  }
+
+  return new Response();
+};
+```
+
+- [ ] **Step 2: Implement products.create webhook**
+
+Replace `app/routes/webhooks.products.create.tsx` with the same logic as products.update (the flow is identical — upsert handles both cases):
+
+```typescript
+import type { ActionFunctionArgs } from "react-router";
+import { authenticate } from "../shopify.server";
+import db from "../db.server";
+import { getProductWithMetafields } from "../lib/shopify-helpers.server";
+import * as ebayAdapter from "../lib/adapters/ebay.server";
+
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const { shop, topic, payload, admin } = await authenticate.webhook(request);
+
+  console.log(`Received ${topic} webhook for ${shop}`);
+
+  if (!admin) return new Response();
+
+  const ebayAccount = await db.marketplaceAccount.findUnique({
+    where: { shopId_marketplace: { shopId: shop, marketplace: "ebay" } },
+  });
+
+  if (!ebayAccount) return new Response();
+
+  const productGid = `gid://shopify/Product/${payload.id}`;
+  const productData = await getProductWithMetafields(admin, productGid);
+  if (!productData?.variant) return new Response();
+
+  const { product, metafields, variant, images } = productData;
+
+  try {
+    const result = await ebayAdapter.listProduct(
+      product as { id: string; title: string; descriptionHtml?: string },
+      variant as { price: string; compareAtPrice: string | null; sku: string },
+      metafields,
+      images,
+      ebayAccount,
+    );
+
+    await db.marketplaceListing.create({
+      data: {
+        shopId: shop,
+        shopifyProductId: productGid,
+        marketplace: "ebay",
+        marketplaceId: result.marketplaceId,
+        offerId: result.offerId,
+        status: result.status,
+        errorMessage: result.error ?? null,
+        lastSyncedAt: new Date(),
+      },
+    });
+
+    await db.syncLog.create({
+      data: {
+        shopId: shop,
+        marketplace: "ebay",
+        action: "list",
+        productId: productGid,
+        status: result.status === "active" ? "success" : "error",
+        details: JSON.stringify({ title: product.title }),
+      },
+    });
+  } catch (err) {
+    console.error(`eBay sync failed for new product ${payload.id}:`, err);
+  }
+
+  return new Response();
+};
+```
+
+- [ ] **Step 3: Verify**
+
+Run: `npm run typecheck`
+Expected: No type errors.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add app/routes/webhooks.products.create.tsx app/routes/webhooks.products.update.tsx
+git commit -m "feat: wire product webhooks to eBay adapter for create/update sync"
+```
+
+---
+
+### Task 7: Functional eBay Settings Page
+
+**Files:**
+- Modify: `app/routes/app.ebay.tsx`
+
+Add action handlers for: creating default policies, saving selected policy IDs, and triggering bulk sync. Show last sync time. The existing OAuth connect/disconnect flow is preserved.
+
+- [ ] **Step 1: Add action handler for policies and sync**
+
+Add these action intents to the existing `action` function in `app/routes/app.ebay.tsx`:
+
+```typescript
+// Inside the action function, after existing disconnect logic:
+
+if (intent === "create-policies") {
+  const account = await db.marketplaceAccount.findFirst({
+    where: { shopId: session.shop, marketplace: "ebay" },
+  });
+  if (!account) return Response.json({ error: "Not connected" }, { status: 400 });
+
+  const { createFulfillmentPolicy, createPaymentPolicy, createReturnPolicy } =
+    await import("../lib/ebay-policies.server");
+
+  const fulfillment = await createFulfillmentPolicy(account);
+  const payment = await createPaymentPolicy(account);
+  const returnPolicy = await createReturnPolicy(account);
+
+  const currentSettings = (account.settings ?? {}) as Record<string, unknown>;
+  await db.marketplaceAccount.update({
+    where: { id: account.id },
+    data: {
+      settings: {
+        ...currentSettings,
+        fulfillmentPolicyId: fulfillment.policyId,
+        paymentPolicyId: payment.policyId,
+        returnPolicyId: returnPolicy.policyId,
+      },
+    },
+  });
+
+  return Response.json({ success: true });
+}
+
+if (intent === "save-policies") {
+  const account = await db.marketplaceAccount.findFirst({
+    where: { shopId: session.shop, marketplace: "ebay" },
+  });
+  if (!account) return Response.json({ error: "Not connected" }, { status: 400 });
+
+  const currentSettings = (account.settings ?? {}) as Record<string, unknown>;
+  await db.marketplaceAccount.update({
+    where: { id: account.id },
+    data: {
+      settings: {
+        ...currentSettings,
+        fulfillmentPolicyId: formData.get("fulfillmentPolicyId"),
+        paymentPolicyId: formData.get("paymentPolicyId"),
+        returnPolicyId: formData.get("returnPolicyId"),
+      },
+    },
+  });
+
+  return Response.json({ success: true });
+}
+```
+
+- [ ] **Step 2: Add policy selection UI**
+
+In the JSX, replace the static policy cards with functional dropdowns that load existing policies and allow selection or creation. Add a "Sync All Products" button that triggers a bulk sync action.
+
+Key UI sections to add:
+- Policy dropdowns (populated from `getExistingPolicies()` in the loader)
+- "Create Default Policies" button
+- "Sync All Products" / "Sync New Only" buttons
+- Last sync timestamp from most recent SyncLog entry
+- Error list from MarketplaceListing where status="error"
+
+- [ ] **Step 3: Verify**
+
+Run: `npm run typecheck`
+Then manually test the eBay settings page in the dev server.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add app/routes/app.ebay.tsx
+git commit -m "feat: wire eBay settings page with functional policies and sync"
+```
+
+---
+
+## Phase 3: Cross-Channel Sync Engine
+
+### Task 8: Sync Engine
+
+**Files:**
+- Create: `app/lib/sync-engine.server.ts`
+
+Central orchestrator that coordinates delist/relist across all marketplace adapters.
+
+- [ ] **Step 1: Create the sync engine**
+
+Create `app/lib/sync-engine.server.ts`:
+
+```typescript
+import db from "../db.server";
+import * as ebayAdapter from "./adapters/ebay.server";
+
+type SyncResult = {
+  marketplace: string;
+  action: "delist" | "relist" | "error";
+  success: boolean;
+  error?: string;
+};
+
+/**
+ * Delist a product from all marketplaces except the one where it sold.
+ */
+export async function delistFromAllExcept(
+  shopId: string,
+  shopifyProductId: string,
+  excludeMarketplace?: string,
+): Promise<SyncResult[]> {
+  const listings = await db.marketplaceListing.findMany({
+    where: {
+      shopId,
+      shopifyProductId,
+      status: "active",
+      ...(excludeMarketplace && { marketplace: { not: excludeMarketplace } }),
+    },
+    include: { account: true },
+  });
+
+  const results: SyncResult[] = [];
+
+  for (const listing of listings) {
+    try {
+      if (listing.marketplace === "ebay" && listing.offerId && listing.account) {
+        const result = await ebayAdapter.delistProduct(listing.offerId, listing.account);
+        await db.marketplaceListing.update({
+          where: { id: listing.id },
+          data: { status: result.status === "delisted" ? "delisted" : "error", lastSyncedAt: new Date() },
+        });
+        results.push({
+          marketplace: "ebay",
+          action: "delist",
+          success: result.status === "delisted",
+          error: result.error,
+        });
+      }
+      // Whatnot/Helix: no API — log only, mark as delisted in DB
+      if (listing.marketplace === "whatnot" || listing.marketplace === "helix") {
+        await db.marketplaceListing.update({
+          where: { id: listing.id },
+          data: { status: "delisted", lastSyncedAt: new Date() },
+        });
+        results.push({ marketplace: listing.marketplace, action: "delist", success: true });
+      }
+
+      await db.syncLog.create({
+        data: {
+          shopId,
+          marketplace: listing.marketplace,
+          action: "delist",
+          productId: shopifyProductId,
+          status: "success",
+          details: JSON.stringify({ reason: "sold_on_other_channel" }),
+        },
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      results.push({ marketplace: listing.marketplace, action: "error", success: false, error: message });
+      await db.syncLog.create({
+        data: {
+          shopId,
+          marketplace: listing.marketplace,
+          action: "delist",
+          productId: shopifyProductId,
+          status: "error",
+          details: JSON.stringify({ error: message }),
+        },
+      });
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Relist a product on all marketplaces where it was previously delisted.
+ */
+export async function relistAll(
+  shopId: string,
+  shopifyProductId: string,
+): Promise<SyncResult[]> {
+  const listings = await db.marketplaceListing.findMany({
+    where: { shopId, shopifyProductId, status: "delisted" },
+    include: { account: true },
+  });
+
+  const results: SyncResult[] = [];
+
+  for (const listing of listings) {
+    // For eBay: would need to re-publish the offer
+    // For Whatnot/Helix: mark as pending re-export
+    await db.marketplaceListing.update({
+      where: { id: listing.id },
+      data: { status: "pending", lastSyncedAt: new Date() },
+    });
+    results.push({ marketplace: listing.marketplace, action: "relist", success: true });
+
+    await db.syncLog.create({
+      data: {
+        shopId,
+        marketplace: listing.marketplace,
+        action: "list",
+        productId: shopifyProductId,
+        status: "success",
+        details: JSON.stringify({ reason: "inventory_restored" }),
+      },
+    });
+  }
+
+  return results;
+}
+
+/**
+ * Full reconciliation: compare Shopify inventory with marketplace listings.
+ * Delist active listings where Shopify qty = 0.
+ * Relist delisted listings where Shopify qty > 0.
+ */
+export async function reconcile(shopId: string): Promise<{
+  delisted: number;
+  relisted: number;
+  errors: number;
+}> {
+  const activeListings = await db.marketplaceListing.findMany({
+    where: { shopId, status: { in: ["active", "delisted"] } },
+  });
+
+  let delisted = 0;
+  let relisted = 0;
+  let errors = 0;
+
+  // Group by product for batch processing
+  const byProduct = new Map<string, typeof activeListings>();
+  for (const l of activeListings) {
+    const existing = byProduct.get(l.shopifyProductId) ?? [];
+    existing.push(l);
+    byProduct.set(l.shopifyProductId, existing);
+  }
+
+  // For each product, we'd need to check Shopify inventory
+  // This is called from api.reconcile.tsx which has admin API access
+  // The reconcile route will pass inventory data; this function processes it
+
+  return { delisted, relisted, errors };
+}
+```
+
+- [ ] **Step 2: Verify**
+
+Run: `npm run typecheck`
+Expected: No type errors.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add app/lib/sync-engine.server.ts
+git commit -m "feat: add cross-channel sync engine for delist/relist orchestration"
+```
+
+---
+
+### Task 9: Order + Inventory Webhook Handlers
+
+**Files:**
+- Modify: `app/routes/webhooks.orders.create.tsx`
+- Modify: `app/routes/webhooks.inventory.update.tsx`
+
+- [ ] **Step 1: Implement order webhook (cross-channel delist)**
+
+Replace `app/routes/webhooks.orders.create.tsx`:
+
+```typescript
+import type { ActionFunctionArgs } from "react-router";
+import { authenticate } from "../shopify.server";
+import { delistFromAllExcept } from "../lib/sync-engine.server";
+
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const { shop, topic, payload } = await authenticate.webhook(request);
+
+  console.log(`Received ${topic} webhook for ${shop}`);
+
+  const lineItems = payload.line_items ?? [];
+
+  for (const item of lineItems) {
+    if (!item.product_id) continue;
+
+    const productGid = `gid://shopify/Product/${item.product_id}`;
+
+    // Delist from all marketplaces — the sale happened on Shopify
+    const results = await delistFromAllExcept(shop, productGid, "shopify");
+
+    for (const r of results) {
+      console.log(
+        `  ${r.success ? "OK" : "FAIL"}  Delist ${r.marketplace} for product ${item.product_id}`,
+      );
+    }
+  }
+
+  return new Response();
+};
+```
+
+- [ ] **Step 2: Implement inventory webhook**
+
+Replace `app/routes/webhooks.inventory.update.tsx`:
+
+```typescript
+import type { ActionFunctionArgs } from "react-router";
+import { authenticate } from "../shopify.server";
+
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const { shop, topic, payload } = await authenticate.webhook(request);
+
+  console.log(`Received ${topic} webhook for ${shop}`);
+
+  const available = payload.available ?? 0;
+  const inventoryItemId = payload.inventory_item_id;
+
+  // TODO: Resolve inventory_item_id → product_id via Admin API, then call
+  // delistFromAllExcept (if available=0) or relistAll (if available>0).
+  // Currently the reconciliation cron (Task 11) handles inventory drift.
+  // This handler will be enhanced when webhook context reliably provides
+  // admin API access for inventory item lookups.
+
+  console.log(
+    `  Inventory item ${inventoryItemId}: available = ${available}`,
+  );
+
+  return new Response();
+};
+```
+
+- [ ] **Step 3: Verify**
+
+Run: `npm run typecheck`
+Expected: No type errors.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add app/routes/webhooks.orders.create.tsx app/routes/webhooks.inventory.update.tsx
+git commit -m "feat: wire order webhook for cross-channel delist on sale"
+```
+
+---
+
+### Task 10: eBay Inbound Notifications
+
+**Files:**
+- Create: `app/routes/api.ebay-notifications.tsx`
+
+Receives eBay `ORDER_CONFIRMATION` notifications when a card sells on eBay. Sets Shopify inventory to 0 which triggers the cross-channel delist chain.
+
+- [ ] **Step 1: Create the notification handler**
+
+Create `app/routes/api.ebay-notifications.tsx`:
+
+```typescript
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+import db from "../db.server";
+import { delistFromAllExcept } from "../lib/sync-engine.server";
+
+/**
+ * GET handler: eBay challenge-response verification.
+ * eBay sends a challenge to verify the endpoint before enabling notifications.
+ */
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const url = new URL(request.url);
+  const challengeCode = url.searchParams.get("challenge_code");
+
+  if (!challengeCode) {
+    return new Response("Missing challenge_code", { status: 400 });
+  }
+
+  const verificationToken = process.env.EBAY_VERIFICATION_TOKEN ?? "";
+  const endpoint = process.env.EBAY_NOTIFICATION_ENDPOINT ?? url.origin + url.pathname;
+
+  // SHA-256 hash of: challengeCode + verificationToken + endpoint
+  const encoder = new TextEncoder();
+  const data = encoder.encode(challengeCode + verificationToken + endpoint);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const challengeResponse = Array.from(new Uint8Array(hashBuffer))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+
+  return Response.json({ challengeResponse });
+};
+
+/**
+ * POST handler: eBay order notification.
+ */
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const payload = await request.json();
+  const topic = payload.metadata?.topic ?? "";
+
+  console.log(`eBay notification received: ${topic}`);
+
+  if (topic !== "MARKETPLACE.ACCOUNT_DELETION" && topic !== "ORDER.ORDER_CONFIRMATION") {
+    return new Response("Unhandled topic", { status: 200 });
+  }
+
+  // ORDER_CONFIRMATION: a card sold on eBay
+  if (topic === "ORDER.ORDER_CONFIRMATION") {
+    const resourceId = payload.notification?.data?.resourceId;
+    if (!resourceId) return new Response("Missing resourceId", { status: 200 });
+
+    // Look up the listing by eBay listing/item ID
+    const listing = await db.marketplaceListing.findFirst({
+      where: { marketplace: "ebay", marketplaceId: resourceId },
+    });
+
+    if (listing) {
+      // Cross-channel delist: remove from everywhere except eBay
+      await delistFromAllExcept(listing.shopId, listing.shopifyProductId, "ebay");
+
+      // Mark eBay listing as delisted (it sold)
+      await db.marketplaceListing.update({
+        where: { id: listing.id },
+        data: { status: "delisted", lastSyncedAt: new Date() },
+      });
+
+      await db.syncLog.create({
+        data: {
+          shopId: listing.shopId,
+          marketplace: "ebay",
+          action: "delist",
+          productId: listing.shopifyProductId,
+          status: "success",
+          details: JSON.stringify({ reason: "sold_on_ebay", ebayItemId: resourceId }),
+        },
+      });
+
+      console.log(`  Sold on eBay: ${resourceId} — cross-channel delist triggered`);
+    }
+  }
+
+  return new Response("OK", { status: 200 });
+};
+```
+
+- [ ] **Step 2: Verify**
+
+Run: `npm run typecheck`
+Expected: No type errors.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add app/routes/api.ebay-notifications.tsx
+git commit -m "feat: add eBay notification handler for cross-channel delist on sale"
+```
+
+---
+
+### Task 11: Reconciliation Endpoint
+
+**Files:**
+- Create: `app/routes/api.reconcile.tsx`
+
+Called by QStash cron every 15 minutes. Secured by a shared secret header.
+
+- [ ] **Step 1: Create the endpoint**
+
+Create `app/routes/api.reconcile.tsx`:
+
+```typescript
+import type { ActionFunctionArgs } from "react-router";
+import db from "../db.server";
+import { delistFromAllExcept, relistAll } from "../lib/sync-engine.server";
+
+export const action = async ({ request }: ActionFunctionArgs) => {
+  // Verify QStash authorization
+  const authHeader = request.headers.get("Authorization") ?? "";
+  const expectedToken = process.env.QSTASH_SECRET ?? "";
+
+  if (!expectedToken || authHeader !== `Bearer ${expectedToken}`) {
+    return Response.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  console.log("Reconciliation cron started");
+
+  // Get all shops with active marketplace accounts
+  const shops = await db.marketplaceAccount.findMany({
+    select: { shopId: true },
+    distinct: ["shopId"],
+  });
+
+  let totalDelisted = 0;
+  let totalRelisted = 0;
+  let totalErrors = 0;
+
+  for (const { shopId } of shops) {
+    // Find active listings where we should check inventory
+    const activeListings = await db.marketplaceListing.findMany({
+      where: { shopId, status: "active" },
+      select: { shopifyProductId: true, marketplace: true, id: true },
+    });
+
+    // Find delisted listings that may need relisting
+    const delistedListings = await db.marketplaceListing.findMany({
+      where: { shopId, status: "delisted" },
+      select: { shopifyProductId: true, id: true },
+    });
+
+    // Note: Full inventory check requires Admin API access.
+    // In a cron context we don't have Shopify session auth.
+    // This endpoint logs the reconciliation attempt.
+    // Full implementation requires either:
+    // 1. Storing an offline access token for each shop, or
+    // 2. Using the Shopify app's session storage to get a valid token.
+
+    await db.syncLog.create({
+      data: {
+        shopId,
+        marketplace: "all",
+        action: "reconcile",
+        status: "success",
+        details: JSON.stringify({
+          activeListings: activeListings.length,
+          delistedListings: delistedListings.length,
+        }),
+      },
+    });
+  }
+
+  return Response.json({
+    delisted: totalDelisted,
+    relisted: totalRelisted,
+    errors: totalErrors,
+    shops: shops.length,
+  });
+};
+```
+
+- [ ] **Step 2: Verify**
+
+Run: `npm run typecheck`
+Expected: No type errors.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add app/routes/api.reconcile.tsx
+git commit -m "feat: add reconciliation cron endpoint for inventory drift correction"
+```
+
+---
+
+## Phase 4: CSV Export & Price Management
+
+### Task 12: Whatnot CSV Mapper + Export Route (with tests)
+
+**Files:**
+- Create: `app/lib/mappers/whatnot-mapper.ts`
+- Create: `app/lib/mappers/whatnot-mapper.test.ts`
+- Create: `app/routes/api.export-whatnot.tsx`
+
+Port from `reference/helpers/whatnot-columns.js`. Generates a Whatnot bulk-upload CSV.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `app/lib/mappers/whatnot-mapper.test.ts`:
+
+```typescript
+import { describe, it, expect } from "vitest";
+import {
+  buildWhatnotDescription,
+  mapToWhatnotRow,
+  generateWhatnotCSV,
+  WHATNOT_HEADERS,
+} from "./whatnot-mapper";
+
+const GRADED_METAFIELDS = {
+  pokemon: "Charizard",
+  set_name: "Base Set",
+  number: "4/102",
+  grading_company: "PSA",
+  grade: "9",
+  cert_number: "12345678",
+  language: "English",
+  ebay_comp: "900",
+};
+
+const PRODUCT = {
+  title: "Charizard Holo - Base Set #4/102 PSA 9",
+  productType: "Graded Card",
+};
+
+const VARIANT = {
+  price: "855.00",
+  compareAtPrice: "900.00",
+  sku: "PSA-12345678",
+  inventoryQuantity: 1,
+};
+
+describe("buildWhatnotDescription", () => {
+  it("builds a multi-line description from metafields", () => {
+    const desc = buildWhatnotDescription(GRADED_METAFIELDS);
+    expect(desc).toContain("Charizard - Base Set - #4/102");
+    expect(desc).toContain("PSA 9 | Cert: 12345678");
+    expect(desc).toContain("Language: English");
+    expect(desc).toContain("eBay Comp: $900");
+    expect(desc).toContain("cardyeti.com");
+  });
+});
+
+describe("mapToWhatnotRow", () => {
+  it("produces a row matching WHATNOT_HEADERS length", () => {
+    const row = mapToWhatnotRow(PRODUCT, GRADED_METAFIELDS, [], VARIANT);
+    expect(row).toHaveLength(WHATNOT_HEADERS.length);
+  });
+
+  it("sets category and subcategory", () => {
+    const row = mapToWhatnotRow(PRODUCT, GRADED_METAFIELDS, [], VARIANT);
+    expect(row[0]).toBe("Trading Card Games");
+    expect(row[1]).toBe("Pokémon Cards");
+  });
+
+  it("uses compareAtPrice ceiled to whole dollar for BIN price", () => {
+    const row = mapToWhatnotRow(PRODUCT, GRADED_METAFIELDS, [], VARIANT);
+    expect(row[6]).toBe("900"); // Math.ceil(900.00)
+  });
+
+  it("sets condition to Graded for graded cards", () => {
+    const row = mapToWhatnotRow(PRODUCT, GRADED_METAFIELDS, [], VARIANT);
+    expect(row[10]).toBe("Graded");
+  });
+
+  it("sets shipping profile based on product type", () => {
+    const row = mapToWhatnotRow(PRODUCT, GRADED_METAFIELDS, [], VARIANT);
+    expect(row[7]).toBe("4-8 oz");
+  });
+});
+
+describe("generateWhatnotCSV", () => {
+  it("generates valid CSV with headers", () => {
+    const csv = generateWhatnotCSV([
+      { product: PRODUCT, metafields: GRADED_METAFIELDS, images: [], variant: VARIANT },
+    ]);
+    const lines = csv.split("\n");
+    expect(lines[0]).toContain("Category");
+    expect(lines).toHaveLength(2); // header + 1 data row
+  });
+});
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `npx vitest run app/lib/mappers/whatnot-mapper.test.ts`
+Expected: FAIL — module not found.
+
+- [ ] **Step 3: Implement the Whatnot mapper**
+
+Create `app/lib/mappers/whatnot-mapper.ts`:
+
+```typescript
+import type { CardMetafields } from "../shopify-helpers.server";
+
+export const WHATNOT_HEADERS = [
+  "Category", "Sub Category", "Title", "Description", "Quantity", "Type",
+  "Price", "Shipping Profile", "Offerable", "Hazmat", "Condition",
+  "Cost Per Item", "SKU",
+  "Image URL 1", "Image URL 2", "Image URL 3", "Image URL 4",
+  "Image URL 5", "Image URL 6", "Image URL 7", "Image URL 8",
+] as const;
+
+const SHIPPING_PROFILES: Record<string, string> = {
+  "Graded Card": "4-8 oz",
+  "Graded Slab": "4-8 oz",
+  "Raw Single": "0-1 oz",
+  "Curated Lot": "4-8 oz",
+  "Sealed Product": "9 oz - 1 lb",
+};
+
+/**
+ * Build a plain-text Whatnot description from card metafields.
+ */
+export function buildWhatnotDescription(metafields: CardMetafields): string {
+  const lines: string[] = [];
+
+  // Line 1: Pokemon - Set Name - #Number
+  const parts: string[] = [];
+  if (metafields.pokemon) parts.push(metafields.pokemon);
+  if (metafields.set_name) parts.push(metafields.set_name);
+  if (metafields.number) parts.push(`#${metafields.number}`);
+  if (parts.length > 0) lines.push(parts.join(" - "));
+
+  // Line 2: Grader Grade | Cert: cert_number
+  if (metafields.grading_company && metafields.grade) {
+    let gradeLine = `${metafields.grading_company} ${metafields.grade}`;
+    if (metafields.cert_number) gradeLine += ` | Cert: ${metafields.cert_number}`;
+    lines.push(gradeLine);
+  }
+
+  // Line 3: Condition | Language
+  const condParts: string[] = [];
+  if (metafields.condition) condParts.push(`Condition: ${metafields.condition}`);
+  if (metafields.language) condParts.push(`Language: ${metafields.language}`);
+  if (condParts.length > 0) lines.push(condParts.join(" | "));
+
+  // Line 4: eBay Comp
+  if (metafields.ebay_comp) lines.push(`eBay Comp: $${metafields.ebay_comp}`);
+
+  // Line 5: Store URL
+  lines.push("cardyeti.com");
+
+  return lines.join("\n");
+}
+
+/**
+ * Map a Shopify product to a Whatnot CSV row (array matching WHATNOT_HEADERS).
+ */
+export function mapToWhatnotRow(
+  product: { title: string; productType: string },
+  metafields: CardMetafields,
+  images: string[],
+  variant: { price: string; compareAtPrice: string | null; sku: string; inventoryQuantity: number },
+  options?: { shippingProfile?: string },
+): string[] {
+  const description = buildWhatnotDescription(metafields);
+  const quantity = variant.inventoryQuantity > 0 ? String(variant.inventoryQuantity) : "1";
+
+  // BIN price = compareAtPrice ceiled to whole dollar; fallback to variant price
+  const rawPrice = parseFloat(variant.compareAtPrice ?? "") || parseFloat(variant.price) || 0;
+  const price = String(Math.ceil(rawPrice));
+
+  const shippingProfile =
+    options?.shippingProfile ?? SHIPPING_PROFILES[product.productType] ?? "Standard";
+
+  const condition =
+    product.productType === "Graded Card" || product.productType === "Graded Slab"
+      ? "Graded"
+      : product.productType === "Sealed Product"
+        ? "Brand New"
+        : "Used";
+
+  const imageSlots: string[] = [];
+  for (let i = 0; i < 8; i++) {
+    imageSlots.push(images[i] ?? "");
+  }
+
+  return [
+    "Trading Card Games",
+    "Pokémon Cards",
+    product.title,
+    description,
+    quantity,
+    "Buy it Now",
+    price,
+    shippingProfile,
+    "TRUE",
+    "Not Hazmat",
+    condition,
+    "",
+    variant.sku ?? "",
+    ...imageSlots,
+  ];
+}
+
+function escapeCSVField(value: string): string {
+  if (value.includes(",") || value.includes('"') || value.includes("\n")) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
+}
+
+/**
+ * Generate a complete Whatnot CSV string from products.
+ */
+export function generateWhatnotCSV(
+  products: {
+    product: { title: string; productType: string };
+    metafields: CardMetafields;
+    images: string[];
+    variant: { price: string; compareAtPrice: string | null; sku: string; inventoryQuantity: number };
+  }[],
+): string {
+  const headerLine = WHATNOT_HEADERS.map(escapeCSVField).join(",");
+  const dataLines = products.map((p) =>
+    mapToWhatnotRow(p.product, p.metafields, p.images, p.variant)
+      .map(escapeCSVField)
+      .join(","),
+  );
+  return [headerLine, ...dataLines].join("\n");
+}
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `npx vitest run app/lib/mappers/whatnot-mapper.test.ts`
+Expected: All tests PASS.
+
+- [ ] **Step 5: Create the export route**
+
+Create `app/routes/api.export-whatnot.tsx`:
+
+```typescript
+import type { LoaderFunctionArgs } from "react-router";
+import { authenticate } from "../shopify.server";
+import db from "../db.server";
+import { getAllProducts } from "../lib/shopify-helpers.server";
+import { generateWhatnotCSV } from "../lib/mappers/whatnot-mapper";
+
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const { admin, session } = await authenticate.admin(request);
+
+  const url = new URL(request.url);
+  const mode = url.searchParams.get("mode") ?? "all"; // "all" or "new"
+
+  // Fetch all products with metafields
+  const products = await getAllProducts(admin, {
+    query: "status:active",
+  });
+
+  let exportProducts = products.filter((p) => p.variant !== null);
+
+  // If "new only", exclude previously exported products
+  if (mode === "new") {
+    const exportedIds = await db.marketplaceListing.findMany({
+      where: { shopId: session.shop, marketplace: "whatnot" },
+      select: { shopifyProductId: true },
+    });
+    const exportedSet = new Set(exportedIds.map((e) => e.shopifyProductId));
+    exportProducts = exportProducts.filter(
+      (p) => !exportedSet.has(p.product.id as string),
+    );
+  }
+
+  const csvData = exportProducts.map((p) => ({
+    product: p.product as { title: string; productType: string },
+    metafields: p.metafields,
+    images: p.images,
+    variant: p.variant as {
+      price: string;
+      compareAtPrice: string | null;
+      sku: string;
+      inventoryQuantity: number;
+    },
+  }));
+
+  const csv = generateWhatnotCSV(csvData);
+
+  // Log the export
+  await db.syncLog.create({
+    data: {
+      shopId: session.shop,
+      marketplace: "whatnot",
+      action: "list",
+      status: "success",
+      details: JSON.stringify({ type: "csv_export", mode, productCount: csvData.length }),
+    },
+  });
+
+  // Mark exported products in MarketplaceListing
+  for (const p of exportProducts) {
+    const productId = p.product.id as string;
+    await db.marketplaceListing.upsert({
+      where: {
+        shopId_shopifyProductId_marketplace: {
+          shopId: session.shop,
+          shopifyProductId: productId,
+          marketplace: "whatnot",
+        },
+      },
+      create: {
+        shopId: session.shop,
+        shopifyProductId: productId,
+        marketplace: "whatnot",
+        status: "active",
+        lastSyncedAt: new Date(),
+      },
+      update: {
+        lastSyncedAt: new Date(),
+      },
+    });
+  }
+
+  const timestamp = new Date().toISOString().slice(0, 10);
+  return new Response(csv, {
+    headers: {
+      "Content-Type": "text/csv",
+      "Content-Disposition": `attachment; filename="whatnot-export-${timestamp}.csv"`,
+    },
+  });
+};
+```
+
+- [ ] **Step 6: Verify**
+
+Run: `npm run typecheck`
+Expected: No type errors.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add app/lib/mappers/whatnot-mapper.ts app/lib/mappers/whatnot-mapper.test.ts app/routes/api.export-whatnot.tsx
+git commit -m "feat: add Whatnot CSV mapper with tests and export endpoint"
+```
+
+---
+
+### Task 13: Helix CSV Mapper + Export Route
+
+**Files:**
+- Create: `app/lib/mappers/helix-mapper.ts`
+- Create: `app/routes/api.export-helix.tsx`
+
+Maps Shopify products to the Helix listing schema (from `docs/HELIX_PROPOSAL.md`), exported as a flattened CSV.
+
+- [ ] **Step 1: Create the Helix mapper**
+
+Create `app/lib/mappers/helix-mapper.ts`:
+
+```typescript
+import type { CardMetafields } from "../shopify-helpers.server";
+
+export const HELIX_HEADERS = [
+  "Title", "Description", "Price (cents)", "Listing Type", "Condition",
+  "Quantity", "Image URL 1", "Image URL 2", "Image URL 3", "Image URL 4",
+  "Pokémon", "Set Name", "Card Number", "Language", "Year", "Rarity",
+  "Grading Company", "Grade", "Cert Number", "Cert URL",
+  "Population", "Pop Higher", "Subgrades",
+  "Raw Condition", "Centering", "Condition Notes",
+  "Shopify Product ID", "eBay Item ID", "SKU",
+] as const;
+
+/**
+ * Map a Shopify product to a Helix CSV row.
+ */
+export function mapToHelixRow(
+  product: { id: string; title: string; descriptionHtml?: string; productType?: string },
+  metafields: CardMetafields,
+  images: string[],
+  variant: { price: string; compareAtPrice: string | null; sku: string; inventoryQuantity: number },
+): string[] {
+  const priceCents = Math.round(
+    (parseFloat(variant.compareAtPrice ?? "") || parseFloat(variant.price) || 0) * 100,
+  );
+
+  const isGraded = !!(metafields.grading_company && metafields.grade);
+  const condition = isGraded ? "graded"
+    : product.productType === "Sealed Product" ? "sealed"
+    : "raw";
+
+  const imageSlots: string[] = [];
+  for (let i = 0; i < 4; i++) {
+    imageSlots.push(images[i] ?? "");
+  }
+
+  return [
+    product.title,
+    product.descriptionHtml ?? "",
+    String(priceCents),
+    "fixed_price",
+    condition,
+    String(variant.inventoryQuantity > 0 ? variant.inventoryQuantity : 1),
+    ...imageSlots,
+    metafields.pokemon ?? "",
+    metafields.set_name ?? "",
+    metafields.number ?? "",
+    metafields.language ?? "",
+    metafields.year ?? "",
+    metafields.rarity ?? "",
+    metafields.grading_company ?? "",
+    metafields.grade ?? "",
+    metafields.cert_number ?? "",
+    metafields.cert_url ?? "",
+    metafields.population ?? "",
+    metafields.pop_higher ?? "",
+    metafields.subgrades ?? "",
+    isGraded ? "" : (metafields.condition ?? ""),
+    isGraded ? "" : (metafields.centering ?? ""),
+    isGraded ? "" : (metafields.condition_notes ?? ""),
+    product.id,
+    metafields.ebay_item_id ?? "",
+    variant.sku ?? "",
+  ];
+}
+
+function escapeCSVField(value: string): string {
+  if (value.includes(",") || value.includes('"') || value.includes("\n")) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
+}
+
+/**
+ * Generate a complete Helix CSV string from products.
+ */
+export function generateHelixCSV(
+  products: {
+    product: { id: string; title: string; descriptionHtml?: string; productType?: string };
+    metafields: CardMetafields;
+    images: string[];
+    variant: { price: string; compareAtPrice: string | null; sku: string; inventoryQuantity: number };
+  }[],
+): string {
+  const headerLine = HELIX_HEADERS.map(escapeCSVField).join(",");
+  const dataLines = products.map((p) =>
+    mapToHelixRow(p.product, p.metafields, p.images, p.variant)
+      .map(escapeCSVField)
+      .join(","),
+  );
+  return [headerLine, ...dataLines].join("\n");
+}
+```
+
+- [ ] **Step 2: Create the export route**
+
+Create `app/routes/api.export-helix.tsx` — follows the same pattern as the Whatnot export route:
+
+```typescript
+import type { LoaderFunctionArgs } from "react-router";
+import { authenticate } from "../shopify.server";
+import db from "../db.server";
+import { getAllProducts } from "../lib/shopify-helpers.server";
+import { generateHelixCSV } from "../lib/mappers/helix-mapper";
+
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const { admin, session } = await authenticate.admin(request);
+
+  const url = new URL(request.url);
+  const mode = url.searchParams.get("mode") ?? "all";
+
+  const products = await getAllProducts(admin, { query: "status:active" });
+  let exportProducts = products.filter((p) => p.variant !== null);
+
+  if (mode === "new") {
+    const exportedIds = await db.marketplaceListing.findMany({
+      where: { shopId: session.shop, marketplace: "helix" },
+      select: { shopifyProductId: true },
+    });
+    const exportedSet = new Set(exportedIds.map((e) => e.shopifyProductId));
+    exportProducts = exportProducts.filter(
+      (p) => !exportedSet.has(p.product.id as string),
+    );
+  }
+
+  const csvData = exportProducts.map((p) => ({
+    product: p.product as { id: string; title: string; descriptionHtml?: string; productType?: string },
+    metafields: p.metafields,
+    images: p.images,
+    variant: p.variant as {
+      price: string;
+      compareAtPrice: string | null;
+      sku: string;
+      inventoryQuantity: number;
+    },
+  }));
+
+  const csv = generateHelixCSV(csvData);
+
+  await db.syncLog.create({
+    data: {
+      shopId: session.shop,
+      marketplace: "helix",
+      action: "list",
+      status: "success",
+      details: JSON.stringify({ type: "csv_export", mode, productCount: csvData.length }),
+    },
+  });
+
+  // Mark exported products in MarketplaceListing
+  for (const p of exportProducts) {
+    const productId = p.product.id as string;
+    await db.marketplaceListing.upsert({
+      where: {
+        shopId_shopifyProductId_marketplace: {
+          shopId: session.shop,
+          shopifyProductId: productId,
+          marketplace: "helix",
+        },
+      },
+      create: {
+        shopId: session.shop,
+        shopifyProductId: productId,
+        marketplace: "helix",
+        status: "active",
+        lastSyncedAt: new Date(),
+      },
+      update: {
+        lastSyncedAt: new Date(),
+      },
+    });
+  }
+
+  const timestamp = new Date().toISOString().slice(0, 10);
+  return new Response(csv, {
+    headers: {
+      "Content-Type": "text/csv",
+      "Content-Disposition": `attachment; filename="helix-export-${timestamp}.csv"`,
+    },
+  });
+};
+```
+
+- [ ] **Step 3: Verify**
+
+Run: `npm run typecheck`
+Expected: No type errors.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add app/lib/mappers/helix-mapper.ts app/routes/api.export-helix.tsx
+git commit -m "feat: add Helix CSV mapper and export endpoint"
+```
+
+---
+
+### Task 14: Price Download/Upload Routes
+
+**Files:**
+- Create: `app/routes/api.prices.tsx`
+
+Port the price CSV download/upload workflow from `tmp/update-prices-standalone.js` into an in-app API route. The CSV "Price" column is the market/comp price; on upload, a 5% discount is applied to derive the Shopify selling price.
+
+- [ ] **Step 1: Create the price management route**
+
+Create `app/routes/api.prices.tsx`:
+
+```typescript
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+import { authenticate } from "../shopify.server";
+import db from "../db.server";
+
+const SHOPIFY_DISCOUNT = 0.05;
+
+const PRODUCTS_QUERY = `
+  query products($first: Int!, $after: String) {
+    products(first: $first, after: $after) {
+      edges {
+        node {
+          id
+          handle
+          title
+          status
+          totalInventory
+          certNumber: metafield(namespace: "card", key: "cert_number") { value }
+          variants(first: 1) {
+            edges {
+              node {
+                id
+                price
+                compareAtPrice
+                sku
+              }
+            }
+          }
+        }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+`;
+
+const VARIANT_UPDATE_MUTATION = `
+  mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+    productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+      productVariants { id price compareAtPrice }
+      userErrors { field message }
+    }
+  }
+`;
+
+function escapeCSV(value: string): string {
+  const str = String(value ?? "");
+  if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+function parseCSV(text: string): string[][] {
+  const rows: string[][] = [];
+  let field = "";
+  let inQuotes = false;
+  let row: string[] = [];
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    const next = text[i + 1];
+
+    if (inQuotes) {
+      if (ch === '"' && next === '"') { field += '"'; i++; }
+      else if (ch === '"') { inQuotes = false; }
+      else { field += ch; }
+    } else if (ch === '"') { inQuotes = true; }
+    else if (ch === ",") { row.push(field); field = ""; }
+    else if (ch === "\n" || (ch === "\r" && next === "\n")) {
+      row.push(field); field = ""; rows.push(row); row = [];
+      if (ch === "\r") i++;
+    } else { field += ch; }
+  }
+
+  if (field || row.length > 0) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+/**
+ * GET: Download current prices as CSV.
+ * CSV columns: Product ID, Variant ID, Handle, Title, SKU, Status, Inventory, Price, Cert Number
+ * "Price" is the market/comp price (Shopify's compareAtPrice).
+ */
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const { admin, session } = await authenticate.admin(request);
+
+  const products: Record<string, string>[] = [];
+  let after: string | null = null;
+  let hasNextPage = true;
+
+  while (hasNextPage) {
+    const response = await admin.graphql(PRODUCTS_QUERY, {
+      variables: { first: 50, after },
+    });
+    const { data } = await response.json();
+
+    for (const edge of data.products.edges) {
+      const p = edge.node;
+      const v = p.variants.edges[0]?.node;
+      products.push({
+        productId: p.id,
+        variantId: v?.id ?? "",
+        handle: p.handle,
+        title: p.title,
+        sku: v?.sku ?? "",
+        status: p.status,
+        inventory: String(p.totalInventory),
+        price: v?.compareAtPrice ?? v?.price ?? "0.00",
+        certNumber: p.certNumber?.value ?? "",
+      });
+    }
+
+    hasNextPage = data.products.pageInfo.hasNextPage;
+    after = data.products.pageInfo.endCursor;
+  }
+
+  const headers = ["Product ID", "Variant ID", "Handle", "Title", "SKU", "Status", "Inventory", "Price", "Cert Number"];
+  const lines = [headers.join(",")];
+
+  for (const p of products) {
+    lines.push([
+      escapeCSV(p.productId), escapeCSV(p.variantId), escapeCSV(p.handle),
+      escapeCSV(p.title), escapeCSV(p.sku), escapeCSV(p.status),
+      escapeCSV(p.inventory), escapeCSV(p.price), escapeCSV(p.certNumber),
+    ].join(","));
+  }
+
+  const timestamp = new Date().toISOString().slice(0, 10);
+  return new Response(lines.join("\n") + "\n", {
+    headers: {
+      "Content-Type": "text/csv",
+      "Content-Disposition": `attachment; filename="prices-${timestamp}.csv"`,
+    },
+  });
+};
+
+/**
+ * POST: Upload edited CSV to apply price changes.
+ * CSV "Price" = market/comp price → compareAtPrice.
+ * Shopify selling price = Price × (1 - 5%).
+ */
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const { admin, session } = await authenticate.admin(request);
+
+  const formData = await request.formData();
+  const file = formData.get("file") as File | null;
+  const dryRun = formData.get("dryRun") === "true";
+
+  if (!file) {
+    return Response.json({ error: "No file uploaded" }, { status: 400 });
+  }
+
+  const text = await file.text();
+  const rows = parseCSV(text.replace(/^\uFEFF/, "")).filter((r) => r.some((f) => f.trim()));
+
+  if (rows.length < 2) {
+    return Response.json({ error: "CSV has no data rows" }, { status: 400 });
+  }
+
+  // Build column index
+  const headerRow = rows[0];
+  const col: Record<string, number> = {};
+  headerRow.forEach((h, i) => { col[h] = i; });
+
+  const required = ["Product ID", "Variant ID", "Price"];
+  for (const r of required) {
+    if (col[r] === undefined) {
+      return Response.json({ error: `Missing required column: "${r}"` }, { status: 400 });
+    }
+  }
+
+  // Fetch current prices from Shopify
+  const currentPrices = new Map<string, { price: string; compareAtPrice: string }>();
+  let after: string | null = null;
+  let hasNextPage = true;
+
+  while (hasNextPage) {
+    const response = await admin.graphql(PRODUCTS_QUERY, {
+      variables: { first: 50, after },
+    });
+    const { data } = await response.json();
+
+    for (const edge of data.products.edges) {
+      const v = edge.node.variants.edges[0]?.node;
+      if (v) {
+        currentPrices.set(v.id, {
+          price: v.price,
+          compareAtPrice: v.compareAtPrice ?? "",
+        });
+      }
+    }
+
+    hasNextPage = data.products.pageInfo.hasNextPage;
+    after = data.products.pageInfo.endCursor;
+  }
+
+  // Find changes
+  const updates: {
+    productId: string;
+    variantId: string;
+    title: string;
+    oldPrice: string;
+    newPrice: string;
+    newCompareAt: string;
+  }[] = [];
+
+  for (let i = 1; i < rows.length; i++) {
+    const fields = rows[i];
+    const productId = fields[col["Product ID"]]?.trim();
+    const variantId = fields[col["Variant ID"]]?.trim();
+    const csvPrice = fields[col["Price"]]?.trim();
+    const title = col["Title"] !== undefined ? fields[col["Title"]]?.trim() : productId;
+
+    if (!productId || !variantId || !csvPrice) continue;
+
+    const current = currentPrices.get(variantId);
+    if (!current) continue;
+
+    const newCompareAt = csvPrice;
+    const newPrice = (parseFloat(csvPrice) * (1 - SHOPIFY_DISCOUNT)).toFixed(2);
+
+    if (newPrice !== current.price || newCompareAt !== current.compareAtPrice) {
+      updates.push({ productId, variantId, title: title ?? productId, oldPrice: current.price, newPrice, newCompareAt });
+    }
+  }
+
+  if (updates.length === 0) {
+    return Response.json({ message: "No price changes detected", updated: 0 });
+  }
+
+  if (dryRun) {
+    return Response.json({
+      message: `Dry run: ${updates.length} price change(s) found`,
+      dryRun: true,
+      updated: updates.length,
+      changes: updates.map((u) => ({
+        title: u.title,
+        oldPrice: u.oldPrice,
+        newPrice: u.newPrice,
+        newCompareAt: u.newCompareAt,
+      })),
+    });
+  }
+
+  // Apply changes
+  let updated = 0;
+  let failed = 0;
+
+  for (const u of updates) {
+    try {
+      const response = await admin.graphql(VARIANT_UPDATE_MUTATION, {
+        variables: {
+          productId: u.productId,
+          variants: [{ id: u.variantId, price: u.newPrice, compareAtPrice: u.newCompareAt }],
+        },
+      });
+      const { data } = await response.json();
+      const errors = data.productVariantsBulkUpdate.userErrors;
+
+      if (errors?.length > 0) {
+        failed++;
+      } else {
+        updated++;
+      }
+    } catch {
+      failed++;
+    }
+  }
+
+  // Log the price update
+  await db.syncLog.create({
+    data: {
+      shopId: session.shop,
+      marketplace: "all",
+      action: "price_update",
+      status: failed === 0 ? "success" : "error",
+      details: JSON.stringify({ updated, failed, total: updates.length }),
+    },
+  });
+
+  return Response.json({ message: `Updated ${updated} price(s)`, updated, failed });
+};
+```
+
+- [ ] **Step 2: Verify**
+
+Run: `npm run typecheck`
+Expected: No type errors.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add app/routes/api.prices.tsx
+git commit -m "feat: add price CSV download/upload route with 5% discount logic"
+```
+
+---
+
+### Task 15: Functional Whatnot + Helix Settings Pages
+
+**Files:**
+- Modify: `app/routes/app.whatnot.tsx`
+- Modify: `app/routes/app.helix.tsx`
+
+Replace placeholder pages with functional export controls and recency tracking:
+- Export buttons (All / New Only) that download CSV
+- "Last exported X ago" from most recent SyncLog with action="list"
+- "Last price update X ago" from most recent SyncLog with action="price_update"
+- Price CSV download + upload controls
+
+- [ ] **Step 1: Update Whatnot settings page**
+
+Update the loader in `app/routes/app.whatnot.tsx` to fetch:
+- Last CSV export time from `SyncLog` where `marketplace="whatnot"` and `action="list"`
+- Last price update time from `SyncLog` where `action="price_update"`
+- Exported product count from `MarketplaceListing` where `marketplace="whatnot"`
+- Total exportable count from Shopify
+
+Update the JSX to include:
+- **Export section:** "Export All" and "Export New Only" buttons that link to `/api/export-whatnot?mode=all` and `/api/export-whatnot?mode=new`
+- **Last export:** "Last exported X ago" using `RelativeTime`
+- **Price management:** "Download Prices" link to `/api/prices`, file upload form for price CSV
+- **Last price update:** "Last price update X ago"
+- **Stats:** Total exportable / Previously exported / New since last export
+
+- [ ] **Step 2: Update Helix settings page**
+
+Same pattern as Whatnot but with:
+- Export links pointing to `/api/export-helix`
+- Same price download/upload controls (shared `/api/prices` route)
+- "Coming soon" note about API integration
+
+- [ ] **Step 3: Verify**
+
+Run: `npm run typecheck`
+Then manually test both pages in the dev server.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add app/routes/app.whatnot.tsx app/routes/app.helix.tsx
+git commit -m "feat: wire Whatnot + Helix pages with CSV export and price import"
+```
+
+---
+
+## Phase 5: Extensions & Polish
+
+### Task 16: Product Admin Block Extension
+
+**Files:**
+- Create: `extensions/product-sync-status/` (generated via Shopify CLI)
+
+Shows marketplace sync status on each product's detail page in Shopify admin.
+
+- [ ] **Step 1: Generate the extension**
+
+Run: `shopify app generate extension --template admin_block --name product-sync-status`
+
+- [ ] **Step 2: Implement the block UI**
+
+In the generated extension, render:
+- Per-marketplace status badges (Active / Not Listed / Error / Pending)
+- Marketplace listing URLs (clickable links)
+- Last sync timestamp per marketplace
+- "Sync Now" button per marketplace
+
+The block reads product metafields and calls the app's API to get `MarketplaceListing` data for the current product.
+
+- [ ] **Step 3: Verify**
+
+Run: `shopify app dev` and check the product detail page.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add extensions/
+git commit -m "feat: add product admin block showing marketplace sync status"
+```
+
+---
+
+### Task 17: Sync & Price Rules
+
+**Files:**
+- Create: `app/routes/app.sync-rules.tsx`
+- Modify: `app/routes/app.tsx` (add nav link)
+
+Configurable sync rules per marketplace: product type filter, collection filter, tag filter, price range, auto-sync toggle. Stored in `MarketplaceAccount.settings.syncRules` JSON.
+
+- [ ] **Step 1: Create the sync rules route**
+
+Create `app/routes/app.sync-rules.tsx` with:
+- Loader: fetches each `MarketplaceAccount.settings.syncRules`
+- Action: saves updated rules to `MarketplaceAccount.settings`
+- UI: per-marketplace accordion with checkboxes for product types, tag include/exclude, price min/max, auto-sync toggle
+
+- [ ] **Step 2: Add nav link**
+
+Add "Sync Rules" to the navigation in `app/routes/app.tsx`.
+
+- [ ] **Step 3: Verify**
+
+Run: `npm run typecheck` and test in dev server.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add app/routes/app.sync-rules.tsx app/routes/app.tsx
+git commit -m "feat: add sync rules configuration page"
+```
+
+---
+
+### Task 18: App Store Preparation
+
+Checklist of items required before Shopify App Store submission. Each is a separate sub-task.
+
+- [ ] **Step 1: Privacy policy page**
+
+Create a static route at `app/routes/app.privacy.tsx` with the app's privacy policy.
+
+- [ ] **Step 2: Error handling review**
+
+Audit all routes for graceful error handling — ensure user-facing error messages, not raw stack traces.
+
+- [ ] **Step 3: Rate limiting**
+
+Add rate limit awareness to the eBay adapter (respect `X-RateLimit-*` headers) and Shopify Admin API calls (respect 40 calls/second limit).
+
+- [ ] **Step 4: Onboarding flow**
+
+Add a first-time setup wizard that guides users through: connect eBay → create policies → sync products.
+
+- [ ] **Step 5: App listing assets**
+
+Prepare: app name, tagline, description, screenshots of dashboard and settings pages.
+
+---
+
+## Dependencies & Execution Order
+
+```
+Phase 2: eBay Core (Tasks 1-7) — critical path
+  Task 1 (Vitest) → Task 4 (mapper tests need Vitest)
+  Task 2 (Product Fetcher) → Tasks 6, 12, 13, 14 (all need product data)
+  Task 3 (Policies) → Task 7 (settings page needs policies)
+  Task 4 (Mapper) → Task 5 (adapter uses mapper)
+  Task 5 (Adapter) → Tasks 6, 8 (webhooks + sync engine use adapter)
+
+Phase 3: Cross-Channel Sync (Tasks 8-11) — depends on Phase 2
+  Task 5 (Adapter) → Task 8 (sync engine wraps adapters)
+  Task 8 (Sync Engine) → Tasks 9, 10, 11 (all use sync engine)
+
+Phase 4: CSV + Prices (Tasks 12-15) — independent of Phase 3
+  Task 1 (Vitest) → Task 12 (mapper tests)
+  Task 2 (Product Fetcher) → Tasks 12, 13, 14 (all fetch products)
+  Tasks 12-14 → Task 15 (settings pages wire up export routes)
+
+Phase 5: Polish (Tasks 16-18) — depends on Phases 2-4
+  All adapters working → Task 16 (admin block shows status)
+  Tasks 7, 15 → Task 17 (sync rules filter exports + syncs)
+```
+
+**Parallelizable:** Phase 4 (CSV export) can be developed in parallel with Phase 3 (sync engine) since they share no dependencies beyond Phase 2.

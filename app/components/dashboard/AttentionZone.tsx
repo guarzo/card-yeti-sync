@@ -1,13 +1,6 @@
 import { MARKETPLACE_CONFIG, type MarketplaceKey } from "../../lib/marketplace-config";
 import { daysUntil } from "../../lib/ui-helpers";
-
-interface MarketplaceInfo {
-  connected: boolean;
-  activeCount: number;
-  errorCount: number;
-  pendingCount: number;
-  tokenExpiry: string | null;
-}
+import type { MarketplaceInfo } from "../../types/dashboard";
 
 interface AttentionZoneProps {
   marketplaces: Record<string, MarketplaceInfo>;

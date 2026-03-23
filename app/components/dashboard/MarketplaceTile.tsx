@@ -33,15 +33,19 @@ export function MarketplaceTile({
       <s-stack direction="block" gap="small">
         <s-stack direction="inline" gap="small" alignItems="center">
           <s-icon
-            type={icon as never}
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            type={icon as any}
             tone={connected || isShopify ? "info" : undefined}
           />
           <s-text type="strong">{name}</s-text>
         </s-stack>
 
-        <div style={{ fontSize: "1.5rem", fontWeight: "bold" }}>
-          {connected || isShopify ? activeCount : "--"}
-        </div>
+        {/* No s-heading available in admin UI kit; inline style needed for count emphasis */}
+        <s-text type="strong">
+          <span style={{ fontSize: "1.5rem" }}>
+            {connected || isShopify ? activeCount : "--"}
+          </span>
+        </s-text>
         <s-text color="subdued">
           {isShopify
             ? `${activeCount} product${activeCount !== 1 ? "s" : ""}`

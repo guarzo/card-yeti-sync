@@ -32,6 +32,7 @@ interface LoaderData {
   listingCount: number;
   errorCount: number;
   pendingCount: number;
+  delistedCount: number;
   recentErrors: ErrorListing[];
   productTitles: Record<string, string>;
 }
@@ -51,17 +52,19 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     where: {
       shopId: shop,
       marketplace: "ebay",
-      status: { in: ["active", "error", "pending"] },
+      status: { in: ["active", "error", "pending", "delisted"] },
     },
     _count: { id: true },
   });
   let listingCount = 0,
     errorCount = 0,
-    pendingCount = 0;
+    pendingCount = 0,
+    delistedCount = 0;
   for (const row of statusCounts) {
     if (row.status === "active") listingCount = row._count.id;
     else if (row.status === "error") errorCount = row._count.id;
     else if (row.status === "pending") pendingCount = row._count.id;
+    else if (row.status === "delisted") delistedCount = row._count.id;
   }
 
   const recentErrors = await db.marketplaceListing.findMany({
@@ -124,6 +127,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     listingCount,
     errorCount,
     pendingCount,
+    delistedCount,
     authUrl,
     tokenExpiry: account?.tokenExpiry?.toISOString() ?? null,
     recentErrors: recentErrors.map((e) => ({
@@ -147,8 +151,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       db.marketplaceListing.deleteMany({
         where: { shopId: shop, marketplace: "ebay" },
       }),
-      db.marketplaceAccount.delete({
-        where: { shopId_marketplace: { shopId: shop, marketplace: "ebay" } },
+      db.marketplaceAccount.deleteMany({
+        where: { shopId: shop, marketplace: "ebay" },
       }),
     ]);
     return { disconnected: true };
@@ -163,6 +167,7 @@ export default function EbaySettings() {
     listingCount,
     errorCount,
     pendingCount,
+    delistedCount,
     authUrl,
     tokenExpiry,
     recentErrors,
@@ -183,7 +188,7 @@ export default function EbaySettings() {
       const url = new URL(window.location.href);
       url.searchParams.delete("success");
       url.searchParams.delete("error");
-      window.history.replaceState({}, "", url.pathname + url.search + url.hash);
+      window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
     }
   }, [success, error]);
 

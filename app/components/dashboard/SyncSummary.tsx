@@ -1,9 +1,5 @@
 import { MARKETPLACE_CONFIG } from "../../lib/marketplace-config";
-
-interface MarketplaceInfo {
-  connected: boolean;
-  activeCount: number;
-}
+import type { MarketplaceInfo } from "../../types/dashboard";
 
 interface SyncSummaryProps {
   marketplaces: Record<string, MarketplaceInfo>;
@@ -36,7 +32,8 @@ export function SyncSummary({
               justifyContent="space-between"
             >
               <s-stack direction="inline" gap="small" alignItems="center">
-                <s-icon type={config.icon as never} size="small" />
+                {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                <s-icon type={config.icon as any} size="small" />
                 <s-text>{config.label}</s-text>
               </s-stack>
               <s-text type="strong">
