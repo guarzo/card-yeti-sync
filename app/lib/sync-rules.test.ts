@@ -46,11 +46,11 @@ describe("productPassesSyncRules", () => {
     })).toBe(false);
   });
 
-  it("passes when productType is undefined (not filterable)", () => {
+  it("rejects when productType is undefined and productTypes filter is active", () => {
     expect(productPassesSyncRules(DEFAULT_SYNC_RULES, {
       tags: [],
       price: 100,
-    })).toBe(true);
+    })).toBe(false);
   });
 
   it("passes with permissive rules (empty lists, null ranges)", () => {

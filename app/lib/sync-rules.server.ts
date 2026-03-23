@@ -4,9 +4,20 @@ import { type SyncRules, DEFAULT_SYNC_RULES } from "./sync-rules";
 export type { SyncRules };
 export { DEFAULT_SYNC_RULES };
 
-export function getSyncRules(account: MarketplaceAccount): SyncRules {
+export function getSyncRules(account: Pick<MarketplaceAccount, "settings">): SyncRules {
   const settings = (account.settings ?? {}) as Record<string, unknown>;
-  return (settings.syncRules as SyncRules) ?? DEFAULT_SYNC_RULES;
+  const raw: unknown = settings.syncRules;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { ...DEFAULT_SYNC_RULES };
+  }
+  const obj = raw as Record<string, unknown>;
+  return {
+    productTypes: Array.isArray(obj.productTypes) ? obj.productTypes.filter((v): v is string => typeof v === "string") : DEFAULT_SYNC_RULES.productTypes,
+    excludeTags: Array.isArray(obj.excludeTags) ? obj.excludeTags.filter((v): v is string => typeof v === "string") : DEFAULT_SYNC_RULES.excludeTags,
+    priceMin: typeof obj.priceMin === "number" && Number.isFinite(obj.priceMin) ? obj.priceMin : DEFAULT_SYNC_RULES.priceMin,
+    priceMax: typeof obj.priceMax === "number" && Number.isFinite(obj.priceMax) ? obj.priceMax : DEFAULT_SYNC_RULES.priceMax,
+    autoSyncNew: typeof obj.autoSyncNew === "boolean" ? obj.autoSyncNew : DEFAULT_SYNC_RULES.autoSyncNew,
+  };
 }
 
 /**
@@ -19,8 +30,7 @@ export function productPassesSyncRules(
 ): boolean {
   if (
     rules.productTypes.length > 0 &&
-    product.productType &&
-    !rules.productTypes.includes(product.productType)
+    (!product.productType || !rules.productTypes.includes(product.productType))
   ) {
     return false;
   }

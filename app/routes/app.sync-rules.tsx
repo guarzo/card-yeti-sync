@@ -5,6 +5,7 @@ import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { MARKETPLACE_CONFIG, type MarketplaceKey } from "../lib/marketplace-config";
 import { type SyncRules, DEFAULT_SYNC_RULES } from "../lib/sync-rules";
+import { getSyncRules } from "../lib/sync-rules.server";
 
 const PRODUCT_TYPES = [
   "Graded Card",
@@ -24,9 +25,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const rulesByMarketplace: Record<string, SyncRules> = {};
   for (const account of accounts) {
-    const settings = (account.settings ?? {}) as Record<string, unknown>;
-    rulesByMarketplace[account.marketplace] =
-      (settings.syncRules as SyncRules) ?? DEFAULT_SYNC_RULES;
+    rulesByMarketplace[account.marketplace] = getSyncRules(account);
   }
 
   return { rulesByMarketplace, connectedMarketplaces: accounts.map((a) => a.marketplace) };
@@ -54,14 +53,27 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const priceMaxRaw = formData.get("priceMax")?.toString();
   const autoSyncNew = formData.get("autoSyncNew") === "on";
 
+  const priceMin = priceMinRaw ? parseFloat(priceMinRaw) : null;
+  const priceMax = priceMaxRaw ? parseFloat(priceMaxRaw) : null;
+
+  if (priceMin !== null && !Number.isFinite(priceMin)) {
+    return Response.json({ error: "Invalid minimum price" }, { status: 400 });
+  }
+  if (priceMax !== null && !Number.isFinite(priceMax)) {
+    return Response.json({ error: "Invalid maximum price" }, { status: 400 });
+  }
+  if (priceMin !== null && priceMax !== null && priceMin > priceMax) {
+    return Response.json({ error: "Minimum price must not exceed maximum price" }, { status: 400 });
+  }
+
   const syncRules: SyncRules = {
     productTypes: selectedTypes.length > 0 ? selectedTypes : DEFAULT_SYNC_RULES.productTypes,
     excludeTags: excludeTagsRaw
       .split(",")
       .map((t) => t.trim())
       .filter(Boolean),
-    priceMin: priceMinRaw ? parseFloat(priceMinRaw) : null,
-    priceMax: priceMaxRaw ? parseFloat(priceMaxRaw) : null,
+    priceMin,
+    priceMax,
     autoSyncNew,
   };
 
