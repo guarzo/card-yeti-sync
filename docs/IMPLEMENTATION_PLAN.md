@@ -52,6 +52,14 @@
 - Privacy policy page
 - Code review fixes (timing-safe auth, conditional syncLog, extracted helpers)
 
+### Phase 6: Sync Settings, Bulk Ops & Price Rules
+- Inventory sync toggle (enable/disable `inventory_levels/update` webhook per marketplace)
+- Cross-channel delisting toggle (enable/disable `orders/create` delist per marketplace)
+- Manual reconciliation trigger ("Reconcile Now" button on eBay page)
+- Bulk eBay listing import by SKU (discover Marketplace Connector listings, import into Card Yeti DB with mismatch report)
+- Configurable Shopify discount % per marketplace (replaces hardcoded 5%)
+- Typed account settings helper with defaults
+
 ---
 
 ## Remaining / Future Work
@@ -68,8 +76,4 @@
 - See `docs/HELIX_PROPOSAL.md` and `docs/OPTION_B_IMPLEMENTATION.md` for detailed specs
 
 ### Nice-to-haves
-- eBay sync settings toggles (auto-sync, inventory sync, cross-channel delist) — UI exists but disabled
 - eBay business policy editing from within the app
-- Manual reconciliation trigger from dashboard UI
-- Bulk initial sync button for existing inventory
-- Per-marketplace price rules
