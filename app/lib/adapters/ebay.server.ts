@@ -22,6 +22,9 @@ async function ebayApiCallWithPersist(
 ): Promise<Response> {
   const { response, updatedTokens } = await ebayApiCall(method, path, body, account);
   if (updatedTokens) {
+    // Update in-memory so subsequent calls in the same request use the fresh token
+    account.accessToken = updatedTokens.accessToken;
+    account.tokenExpiry = updatedTokens.tokenExpiry;
     try {
       await db.marketplaceAccount.update({
         where: { id: account.id },

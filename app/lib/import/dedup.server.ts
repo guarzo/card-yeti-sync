@@ -31,10 +31,10 @@ const BATCH_EBAY_ID_QUERY = `#graphql
 /**
  * Build a single GraphQL query that looks up multiple handles via aliases.
  */
-function buildBatchHandleQuery(handles: string[]): string {
-  const fields = handles.map((h, i) => {
-    const escaped = h.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-    return `h${i}: productByHandle(handle: "${escaped}") { id }`;
+function buildBatchHandleQuery(handles: Array<{ index: number; handle: string }>): string {
+  const fields = handles.map(({ index, handle }) => {
+    const escaped = handle.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    return `h${index}: productByHandle(handle: "${escaped}") { id }`;
   });
   return `#graphql\n  query {\n    ${fields.join("\n    ")}\n  }`;
 }
@@ -95,22 +95,32 @@ export async function checkDuplicates(
   );
   for (let i = 0; i < remainingCards.length; i += BATCH_SIZE) {
     const batch = remainingCards.slice(i, i + BATCH_SIZE);
-    const handles = batch.map((c) => {
-      const title = buildTitle(c);
-      return c.customLabel ? slugify(c.customLabel) : slugify(title);
-    });
+
+    // Build handle entries, skipping empty handles (all-symbol card names)
+    const handleEntries: Array<{ index: number; handle: string; card: ParsedCard }> = [];
+    for (let j = 0; j < batch.length; j++) {
+      const title = buildTitle(batch[j]);
+      const handle = batch[j].customLabel
+        ? slugify(batch[j].customLabel)
+        : slugify(title);
+      if (handle) {
+        handleEntries.push({ index: j, handle, card: batch[j] });
+      }
+    }
+
+    if (handleEntries.length === 0) continue;
 
     try {
-      const query = buildBatchHandleQuery(handles);
+      const query = buildBatchHandleQuery(handleEntries);
       const res = await admin.graphql(query);
       const data = await res.json();
 
-      for (let j = 0; j < batch.length; j++) {
-        const result = data.data?.[`h${j}`];
+      for (const entry of handleEntries) {
+        const result = data.data?.[`h${entry.index}`];
         if (result) {
-          batch[j].isDuplicate = true;
-          batch[j].duplicateProductId = result.id;
-          batch[j].selected = false;
+          entry.card.isDuplicate = true;
+          entry.card.duplicateProductId = result.id;
+          entry.card.selected = false;
         }
       }
     } catch (err) {

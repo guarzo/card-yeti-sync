@@ -208,6 +208,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const status: "active" | "draft" = statusRaw === "draft" ? "draft" : "active";
     const rotateNewArrivals = formData.get("rotateNewArrivals") === "true";
 
+    // Re-run dedup server-side so a tampered payload cannot bypass duplicate detection
+    await checkDuplicates(admin, selectedCards);
+
     const storeData = await fetchStoreData(admin);
 
     if (rotateNewArrivals) {

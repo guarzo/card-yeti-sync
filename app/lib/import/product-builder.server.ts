@@ -530,13 +530,20 @@ export async function removeNewArrivalTags(
 
   let successCount = 0;
   for (const product of products) {
-    const res = await admin.graphql(TAGS_REMOVE_MUTATION, {
-      variables: { id: product.id, tags: ["new-arrival"] },
-    });
-    const data = await res.json();
-    const errors = data.data?.tagsRemove?.userErrors ?? [];
-    if (errors.length === 0) {
-      successCount++;
+    try {
+      const res = await admin.graphql(TAGS_REMOVE_MUTATION, {
+        variables: { id: product.id, tags: ["new-arrival"] },
+      });
+      const data = await res.json();
+      const errors = data.data?.tagsRemove?.userErrors ?? [];
+      if (errors.length === 0) {
+        successCount++;
+      }
+    } catch (err) {
+      console.error(
+        `Failed to remove new-arrival tag from product ${product.id}:`,
+        err instanceof Error ? err.message : err,
+      );
     }
     await sleep(DELAY_MS);
   }
