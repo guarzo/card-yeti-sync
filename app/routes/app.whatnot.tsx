@@ -9,9 +9,11 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import db from "../db.server";
 import { fetchProductTypeCounts } from "../lib/graphql-queries.server";
 import { StatCard } from "../components/StatCard";
+import { RelativeTime } from "../components/RelativeTime";
 
 interface LoaderData {
   lastExportDate: string | null;
+  lastPriceUpdateDate: string | null;
   productCount: number;
   productTypes: Array<{ type: string; count: number }>;
 }
@@ -27,6 +29,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const lastExport = await db.syncLog.findFirst({
     where: { shopId: shop, marketplace: "whatnot", action: "list" },
     orderBy: { createdAt: "desc" },
+    select: { createdAt: true, details: true },
+  });
+
+  const lastPriceUpdate = await db.syncLog.findFirst({
+    where: { shopId: shop, action: "price_update" },
+    orderBy: { createdAt: "desc" },
+    select: { createdAt: true },
   });
 
   const { totalProducts: productCount, typeCounts: productTypes } =
@@ -34,6 +43,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   return {
     lastExportDate: lastExport?.createdAt?.toISOString() ?? null,
+    lastPriceUpdateDate: lastPriceUpdate?.createdAt?.toISOString() ?? null,
     productCount,
     productTypes,
   } satisfies LoaderData;
@@ -42,7 +52,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 const SUPPORTED_TYPES = ["Graded Card", "Graded Slab"];
 
 export default function WhatnotSettings() {
-  const { lastExportDate, productTypes } = useLoaderData<typeof loader>();
+  const { lastExportDate, lastPriceUpdateDate, productTypes } =
+    useLoaderData<typeof loader>();
 
   const exportableCount = productTypes
     .filter((t) => SUPPORTED_TYPES.includes(t.type))
@@ -71,9 +82,11 @@ export default function WhatnotSettings() {
                 <StatCard
                   label="Last Export"
                   value={
-                    lastExportDate
-                      ? new Date(lastExportDate).toLocaleDateString()
-                      : "Never"
+                    lastExportDate ? (
+                      <RelativeTime date={lastExportDate} />
+                    ) : (
+                      "Never"
+                    )
                   }
                 />
               </s-grid-item>
@@ -85,12 +98,40 @@ export default function WhatnotSettings() {
             <s-divider />
 
             <s-stack direction="inline" gap="base" alignItems="center">
-              <s-button variant="primary" disabled>
-                Export All Products
-              </s-button>
-              <s-button disabled>Export New Only</s-button>
-              <s-badge tone="info">Coming Soon</s-badge>
+              <a href="/api/export-whatnot?mode=all" download>
+                <s-button variant="primary">Export All Products</s-button>
+              </a>
+              <a href="/api/export-whatnot?mode=new" download>
+                <s-button>Export New Only</s-button>
+              </a>
             </s-stack>
+          </s-stack>
+        </s-box>
+      </s-section>
+
+      {/* Price Management */}
+      <s-section heading="Price Management">
+        <s-paragraph color="subdued">
+          Download current prices as a CSV or upload updated prices in bulk.
+        </s-paragraph>
+
+        <s-box padding="base" borderWidth="base" borderRadius="base">
+          <s-stack direction="block" gap="base">
+            <s-stack direction="inline" gap="base" alignItems="center">
+              <a href="/api/prices" download>
+                <s-button variant="primary">Download Prices</s-button>
+              </a>
+            </s-stack>
+
+            {lastPriceUpdateDate && (
+              <s-stack direction="inline" gap="small" alignItems="center">
+                <s-text color="subdued">Last price update:</s-text>
+                <RelativeTime date={lastPriceUpdateDate} />
+              </s-stack>
+            )}
+            {!lastPriceUpdateDate && (
+              <s-text color="subdued">No price updates recorded yet.</s-text>
+            )}
           </s-stack>
         </s-box>
       </s-section>

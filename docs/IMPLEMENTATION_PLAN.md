@@ -2767,32 +2767,205 @@ git commit -m "feat: wire Whatnot + Helix pages with CSV export and price import
 ### Task 16: Product Admin Block Extension
 
 **Files:**
-- Create: `extensions/product-sync-status/` (generated via Shopify CLI)
+- Modify: `extensions/product-sync-status/src/BlockExtension.jsx`
+- Modify: `extensions/product-sync-status/locales/en.default.json`
+- Create: `app/routes/api.product-sync-status.tsx`
 
-Shows marketplace sync status on each product's detail page in Shopify admin.
+The extension scaffold was generated via `shopify app generate extension`. It targets `admin.product-details.block.render` and uses Preact with Shopify Polaris Web Components (`s-*` tags). The extension calls a backend API route on the app to fetch `MarketplaceListing` data for the current product.
 
-- [ ] **Step 1: Generate the extension**
+- [ ] **Step 1: Create the backend API route**
 
-Run: `shopify app generate extension --template admin_block --name product-sync-status`
+Create `app/routes/api.product-sync-status.tsx` — returns listing status for a product across all marketplaces:
 
-- [ ] **Step 2: Implement the block UI**
+```typescript
+import type { LoaderFunctionArgs } from "react-router";
+import { authenticate } from "../shopify.server";
+import db from "../db.server";
 
-In the generated extension, render:
-- Per-marketplace status badges (Active / Not Listed / Error / Pending)
-- Marketplace listing URLs (clickable links)
-- Last sync timestamp per marketplace
-- "Sync Now" button per marketplace
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const { session } = await authenticate.admin(request);
 
-The block reads product metafields and calls the app's API to get `MarketplaceListing` data for the current product.
+  const url = new URL(request.url);
+  const productId = url.searchParams.get("productId");
 
-- [ ] **Step 3: Verify**
+  if (!productId) {
+    return Response.json({ error: "Missing productId" }, { status: 400 });
+  }
 
-Run: `shopify app dev` and check the product detail page.
+  const listings = await db.marketplaceListing.findMany({
+    where: { shopId: session.shop, shopifyProductId: productId },
+    select: {
+      marketplace: true,
+      marketplaceId: true,
+      status: true,
+      lastSyncedAt: true,
+      errorMessage: true,
+    },
+  });
 
-- [ ] **Step 4: Commit**
+  const accounts = await db.marketplaceAccount.findMany({
+    where: { shopId: session.shop },
+    select: { marketplace: true },
+  });
+
+  const connectedMarketplaces = accounts.map((a) => a.marketplace);
+
+  return Response.json({ listings, connectedMarketplaces });
+};
+```
+
+- [ ] **Step 2: Update locale strings**
+
+Replace `extensions/product-sync-status/locales/en.default.json`:
+
+```json
+{
+  "name": "Marketplace Sync Status",
+  "heading": "Marketplace Sync",
+  "loading": "Loading sync status...",
+  "noMarketplaces": "No marketplaces connected",
+  "notListed": "Not listed",
+  "lastSynced": "Last synced",
+  "error": "Error",
+  "never": "Never"
+}
+```
+
+- [ ] **Step 3: Implement the block UI**
+
+Replace `extensions/product-sync-status/src/BlockExtension.jsx`:
+
+```jsx
+import "@shopify/ui-extensions/preact";
+import { render } from "preact";
+import { useState, useEffect } from "preact/hooks";
+
+export default async () => {
+  render(<Extension />, document.body);
+};
+
+const STATUS_BADGES = {
+  active: { tone: "success", label: "Active" },
+  pending: { tone: "caution", label: "Pending" },
+  error: { tone: "critical", label: "Error" },
+  delisted: { tone: undefined, label: "Delisted" },
+};
+
+const MARKETPLACE_LABELS = {
+  ebay: "eBay",
+  whatnot: "Whatnot",
+  helix: "Helix",
+};
+
+function timeAgo(dateStr) {
+  if (!dateStr) return null;
+  const seconds = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+function Extension() {
+  const { i18n, data } = shopify;
+  const [listings, setListings] = useState(null);
+  const [connected, setConnected] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const productId = data?.selected?.[0]?.id;
+
+  useEffect(() => {
+    if (!productId) {
+      setLoading(false);
+      return;
+    }
+
+    fetch(`/api/product-sync-status?productId=${encodeURIComponent(productId)}`)
+      .then((r) => r.json())
+      .then((data) => {
+        setListings(data.listings || []);
+        setConnected(data.connectedMarketplaces || []);
+      })
+      .catch(() => {
+        setListings([]);
+        setConnected([]);
+      })
+      .finally(() => setLoading(false));
+  }, [productId]);
+
+  return (
+    <s-admin-block heading={i18n.translate("heading")}>
+      <s-stack direction="block" gap="base">
+        {loading && (
+          <s-text color="subdued">{i18n.translate("loading")}</s-text>
+        )}
+
+        {!loading && connected.length === 0 && (
+          <s-text color="subdued">{i18n.translate("noMarketplaces")}</s-text>
+        )}
+
+        {!loading &&
+          connected.map((mp) => {
+            const listing = listings?.find((l) => l.marketplace === mp);
+            const badge = listing
+              ? STATUS_BADGES[listing.status] || STATUS_BADGES.pending
+              : null;
+            const label = MARKETPLACE_LABELS[mp] || mp;
+
+            return (
+              <s-box
+                key={mp}
+                padding="small"
+                borderWidth="base"
+                borderRadius="base"
+              >
+                <s-stack direction="inline" gap="base" alignItems="center" style={{ justifyContent: "space-between" }}>
+                  <s-text type="strong">{label}</s-text>
+                  {badge ? (
+                    <s-badge tone={badge.tone}>{badge.label}</s-badge>
+                  ) : (
+                    <s-badge>{i18n.translate("notListed")}</s-badge>
+                  )}
+                </s-stack>
+
+                {listing?.lastSyncedAt && (
+                  <s-text color="subdued" size="small">
+                    {i18n.translate("lastSynced")}: {timeAgo(listing.lastSyncedAt)}
+                  </s-text>
+                )}
+
+                {listing?.status === "error" && listing.errorMessage && (
+                  <s-text color="critical" size="small">
+                    {listing.errorMessage}
+                  </s-text>
+                )}
+
+                {listing?.marketplaceId && mp === "ebay" && (
+                  <s-link href={`https://www.ebay.com/itm/${listing.marketplaceId}`} external>
+                    View on eBay
+                  </s-link>
+                )}
+              </s-box>
+            );
+          })}
+      </s-stack>
+    </s-admin-block>
+  );
+}
+```
+
+- [ ] **Step 4: Verify**
+
+Run: `npm run typecheck`
+Then verify with `shopify app dev` — the block should appear on product detail pages.
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git add extensions/
+git add extensions/ app/routes/api.product-sync-status.tsx
 git commit -m "feat: add product admin block showing marketplace sync status"
 ```
 
@@ -2804,22 +2977,229 @@ git commit -m "feat: add product admin block showing marketplace sync status"
 - Create: `app/routes/app.sync-rules.tsx`
 - Modify: `app/routes/app.tsx` (add nav link)
 
-Configurable sync rules per marketplace: product type filter, collection filter, tag filter, price range, auto-sync toggle. Stored in `MarketplaceAccount.settings.syncRules` JSON.
+Per-marketplace sync rules stored in `MarketplaceAccount.settings.syncRules` JSON. Controls which products get synced/exported for each marketplace.
 
 - [ ] **Step 1: Create the sync rules route**
 
-Create `app/routes/app.sync-rules.tsx` with:
-- Loader: fetches each `MarketplaceAccount.settings.syncRules`
-- Action: saves updated rules to `MarketplaceAccount.settings`
-- UI: per-marketplace accordion with checkboxes for product types, tag include/exclude, price min/max, auto-sync toggle
+Create `app/routes/app.sync-rules.tsx`:
+
+```typescript
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+import { Form, useLoaderData } from "react-router";
+import { authenticate } from "../shopify.server";
+import db from "../db.server";
+import { MARKETPLACE_CONFIG, type MarketplaceKey } from "../lib/marketplace-config";
+
+interface SyncRules {
+  productTypes: string[];
+  excludeTags: string[];
+  priceMin: number | null;
+  priceMax: number | null;
+  autoSyncNew: boolean;
+}
+
+const DEFAULT_RULES: SyncRules = {
+  productTypes: ["Graded Card", "Raw Single", "Sealed Product", "Curated Lot"],
+  excludeTags: [],
+  priceMin: null,
+  priceMax: null,
+  autoSyncNew: true,
+};
+
+const PRODUCT_TYPES = [
+  "Graded Card",
+  "Graded Slab",
+  "Raw Single",
+  "Sealed Product",
+  "Curated Lot",
+];
+
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const { session } = await authenticate.admin(request);
+
+  const accounts = await db.marketplaceAccount.findMany({
+    where: { shopId: session.shop },
+    select: { marketplace: true, settings: true },
+  });
+
+  const rulesByMarketplace: Record<string, SyncRules> = {};
+  for (const account of accounts) {
+    const settings = (account.settings ?? {}) as Record<string, unknown>;
+    rulesByMarketplace[account.marketplace] =
+      (settings.syncRules as SyncRules) ?? DEFAULT_RULES;
+  }
+
+  return { rulesByMarketplace, connectedMarketplaces: accounts.map((a) => a.marketplace) };
+};
+
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const { session } = await authenticate.admin(request);
+  const formData = await request.formData();
+
+  const marketplace = formData.get("marketplace")?.toString();
+  if (!marketplace) {
+    return Response.json({ error: "Missing marketplace" }, { status: 400 });
+  }
+
+  const account = await db.marketplaceAccount.findUnique({
+    where: { shopId_marketplace: { shopId: session.shop, marketplace } },
+  });
+  if (!account) {
+    return Response.json({ error: "Marketplace not connected" }, { status: 400 });
+  }
+
+  const selectedTypes = formData.getAll("productTypes").map((v) => v.toString());
+  const excludeTagsRaw = formData.get("excludeTags")?.toString() ?? "";
+  const priceMinRaw = formData.get("priceMin")?.toString();
+  const priceMaxRaw = formData.get("priceMax")?.toString();
+  const autoSyncNew = formData.get("autoSyncNew") === "on";
+
+  const syncRules: SyncRules = {
+    productTypes: selectedTypes.length > 0 ? selectedTypes : DEFAULT_RULES.productTypes,
+    excludeTags: excludeTagsRaw
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean),
+    priceMin: priceMinRaw ? parseFloat(priceMinRaw) : null,
+    priceMax: priceMaxRaw ? parseFloat(priceMaxRaw) : null,
+    autoSyncNew,
+  };
+
+  const currentSettings = (account.settings ?? {}) as Record<string, unknown>;
+  await db.marketplaceAccount.update({
+    where: { id: account.id },
+    data: {
+      settings: { ...currentSettings, syncRules },
+    },
+  });
+
+  return Response.json({ success: true });
+};
+
+export default function SyncRulesPage() {
+  const { rulesByMarketplace, connectedMarketplaces } = useLoaderData<typeof loader>();
+
+  if (connectedMarketplaces.length === 0) {
+    return (
+      <s-page title="Sync Rules">
+        <s-card>
+          <s-box padding="large">
+            <s-text color="subdued">
+              No marketplaces connected. Connect a marketplace first to configure sync rules.
+            </s-text>
+          </s-box>
+        </s-card>
+      </s-page>
+    );
+  }
+
+  return (
+    <s-page title="Sync Rules">
+      <s-stack direction="block" gap="large">
+        <s-text color="subdued">
+          Configure which products get synced or exported for each connected marketplace.
+        </s-text>
+
+        {connectedMarketplaces.map((mp) => {
+          const rules = rulesByMarketplace[mp] ?? DEFAULT_RULES;
+          const config = MARKETPLACE_CONFIG[mp as MarketplaceKey];
+          const label = config?.label ?? mp;
+
+          return (
+            <s-card key={mp}>
+              <Form method="post">
+                <input type="hidden" name="marketplace" value={mp} />
+                <s-stack direction="block" gap="base">
+                  <s-text type="strong">{label} Sync Rules</s-text>
+                  <s-divider />
+
+                  {/* Product Types */}
+                  <s-text type="strong">Product Types</s-text>
+                  <s-stack direction="block" gap="small">
+                    {PRODUCT_TYPES.map((type) => (
+                      <label key={type} style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                        <input
+                          type="checkbox"
+                          name="productTypes"
+                          value={type}
+                          defaultChecked={rules.productTypes.includes(type)}
+                        />
+                        {type}
+                      </label>
+                    ))}
+                  </s-stack>
+
+                  {/* Exclude Tags */}
+                  <s-text type="strong">Exclude Tags</s-text>
+                  <s-text color="subdued">Comma-separated list of tags to exclude from sync</s-text>
+                  <input
+                    type="text"
+                    name="excludeTags"
+                    defaultValue={rules.excludeTags.join(", ")}
+                    placeholder="do-not-sync, hold"
+                    style={{ width: "100%", padding: "0.5rem" }}
+                  />
+
+                  {/* Price Range */}
+                  <s-text type="strong">Price Range</s-text>
+                  <s-stack direction="inline" gap="base" alignItems="center">
+                    <input
+                      type="number"
+                      name="priceMin"
+                      defaultValue={rules.priceMin ?? ""}
+                      placeholder="Min"
+                      style={{ width: "100px", padding: "0.5rem" }}
+                    />
+                    <s-text>to</s-text>
+                    <input
+                      type="number"
+                      name="priceMax"
+                      defaultValue={rules.priceMax ?? ""}
+                      placeholder="Max"
+                      style={{ width: "100px", padding: "0.5rem" }}
+                    />
+                  </s-stack>
+
+                  {/* Auto-sync */}
+                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <input
+                      type="checkbox"
+                      name="autoSyncNew"
+                      defaultChecked={rules.autoSyncNew}
+                    />
+                    <s-text>Auto-sync new products</s-text>
+                  </label>
+
+                  <s-button variant="primary" type="submit">Save {label} Rules</s-button>
+                </s-stack>
+              </Form>
+            </s-card>
+          );
+        })}
+      </s-stack>
+    </s-page>
+  );
+}
+```
 
 - [ ] **Step 2: Add nav link**
 
-Add "Sync Rules" to the navigation in `app/routes/app.tsx`.
+In `app/routes/app.tsx`, add a "Sync Rules" link to the `<s-app-nav>`:
+
+```tsx
+<s-app-nav>
+  <s-link href="/app">Dashboard</s-link>
+  <s-link href="/app/ebay">eBay</s-link>
+  <s-link href="/app/whatnot">Whatnot</s-link>
+  <s-link href="/app/helix">Helix</s-link>
+  <s-link href="/app/sync-rules">Sync Rules</s-link>
+</s-app-nav>
+```
 
 - [ ] **Step 3: Verify**
 
-Run: `npm run typecheck` and test in dev server.
+Run: `npm run typecheck`
+Expected: No type errors.
 
 - [ ] **Step 4: Commit**
 
@@ -2832,27 +3212,88 @@ git commit -m "feat: add sync rules configuration page"
 
 ### Task 18: App Store Preparation
 
-Checklist of items required before Shopify App Store submission. Each is a separate sub-task.
+**Files:**
+- Create: `app/routes/app.privacy.tsx`
+- Modify: `app/lib/adapters/ebay.server.ts` (rate limit awareness)
 
-- [ ] **Step 1: Privacy policy page**
+- [ ] **Step 1: Create privacy policy page**
 
-Create a static route at `app/routes/app.privacy.tsx` with the app's privacy policy.
+Create `app/routes/app.privacy.tsx`:
 
-- [ ] **Step 2: Error handling review**
+```typescript
+export default function PrivacyPolicy() {
+  return (
+    <s-page title="Privacy Policy">
+      <s-card>
+        <s-stack direction="block" gap="base" padding="large">
+          <s-text type="strong">Card Yeti Sync — Privacy Policy</s-text>
+          <s-text>Last updated: March 2026</s-text>
 
-Audit all routes for graceful error handling — ensure user-facing error messages, not raw stack traces.
+          <s-text type="strong">What We Collect</s-text>
+          <s-text>
+            Card Yeti Sync accesses your Shopify product data (titles, descriptions,
+            prices, images, inventory, and card metafields) to sync listings to
+            connected marketplaces. We store marketplace connection tokens and sync
+            status records in our database.
+          </s-text>
 
-- [ ] **Step 3: Rate limiting**
+          <s-text type="strong">What We Don't Collect</s-text>
+          <s-text>
+            We do not collect, store, or process customer personal information.
+            The app only works with product and inventory data. We do not sell or
+            share any data with third parties beyond the marketplace APIs you
+            explicitly connect.
+          </s-text>
 
-Add rate limit awareness to the eBay adapter (respect `X-RateLimit-*` headers) and Shopify Admin API calls (respect 40 calls/second limit).
+          <s-text type="strong">Marketplace Connections</s-text>
+          <s-text>
+            When you connect a marketplace (eBay, Whatnot, Helix), we store OAuth
+            tokens securely in our database. These tokens are only used to
+            communicate with the marketplace's API on your behalf. You can
+            disconnect at any time, which deletes the stored tokens.
+          </s-text>
 
-- [ ] **Step 4: Onboarding flow**
+          <s-text type="strong">Data Deletion</s-text>
+          <s-text>
+            Uninstalling the app automatically deletes all stored data including
+            marketplace connections, listing records, sync logs, and price
+            suggestions. You can also request data deletion by contacting us.
+          </s-text>
 
-Add a first-time setup wizard that guides users through: connect eBay → create policies → sync products.
+          <s-text type="strong">Contact</s-text>
+          <s-text>
+            Questions about this policy? Contact us at privacy@cardyeti.com.
+          </s-text>
+        </s-stack>
+      </s-card>
+    </s-page>
+  );
+}
+```
 
-- [ ] **Step 5: App listing assets**
+- [ ] **Step 2: Add rate limit delay to eBay adapter**
 
-Prepare: app name, tagline, description, screenshots of dashboard and settings pages.
+In `app/lib/adapters/ebay.server.ts`, add a small delay helper at the top of the file and use it between sequential API calls in `listProduct`:
+
+```typescript
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+```
+
+Then add `await delay(200);` between the three sequential eBay API calls in `listProduct` (after inventory item PUT, before offer POST; after offer POST, before publish POST) to respect eBay's rate limits.
+
+- [ ] **Step 3: Verify**
+
+Run: `npm run typecheck`
+Expected: No type errors.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add app/routes/app.privacy.tsx app/lib/adapters/ebay.server.ts
+git commit -m "feat: add privacy policy page and eBay rate limit awareness"
+```
 
 ---
 

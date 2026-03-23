@@ -158,6 +158,57 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return { disconnected: true };
   }
 
+  if (intent === "create-policies") {
+    const account = await db.marketplaceAccount.findFirst({
+      where: { shopId: session.shop, marketplace: "ebay" },
+    });
+    if (!account) return Response.json({ error: "Not connected" }, { status: 400 });
+
+    const { createFulfillmentPolicy, createPaymentPolicy, createReturnPolicy } =
+      await import("../lib/ebay-policies.server");
+
+    const fulfillment = await createFulfillmentPolicy(account);
+    const payment = await createPaymentPolicy(account);
+    const returnPolicy = await createReturnPolicy(account);
+
+    const currentSettings = (account.settings ?? {}) as Record<string, unknown>;
+    await db.marketplaceAccount.update({
+      where: { id: account.id },
+      data: {
+        settings: {
+          ...currentSettings,
+          fulfillmentPolicyId: fulfillment.policyId,
+          paymentPolicyId: payment.policyId,
+          returnPolicyId: returnPolicy.policyId,
+        },
+      },
+    });
+
+    return Response.json({ success: true });
+  }
+
+  if (intent === "save-policies") {
+    const account = await db.marketplaceAccount.findFirst({
+      where: { shopId: session.shop, marketplace: "ebay" },
+    });
+    if (!account) return Response.json({ error: "Not connected" }, { status: 400 });
+
+    const currentSettings = (account.settings ?? {}) as Record<string, unknown>;
+    await db.marketplaceAccount.update({
+      where: { id: account.id },
+      data: {
+        settings: {
+          ...currentSettings,
+          fulfillmentPolicyId: formData.get("fulfillmentPolicyId")?.toString() ?? null,
+          paymentPolicyId: formData.get("paymentPolicyId")?.toString() ?? null,
+          returnPolicyId: formData.get("returnPolicyId")?.toString() ?? null,
+        },
+      },
+    });
+
+    return Response.json({ success: true });
+  }
+
   return null;
 };
 
@@ -167,7 +218,6 @@ export default function EbaySettings() {
     listingCount,
     errorCount,
     pendingCount,
-    delistedCount,
     authUrl,
     tokenExpiry,
     recentErrors,

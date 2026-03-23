@@ -1,18 +1,27 @@
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
+import { delistFromAllExcept } from "../lib/sync-engine.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { shop, topic, payload } = await authenticate.webhook(request);
 
   console.log(`Received ${topic} webhook for ${shop}`);
-  console.log(`Order created: ${payload.id}`);
 
-  // TODO (Phase 3): Cross-channel delist
-  // 1. Extract product IDs from order line items
-  // 2. For each product, find active MarketplaceListings
-  // 3. Call each marketplace adapter's delistProduct()
-  // 4. Update listing status to "delisted"
-  // 5. Log to SyncLog
+  const lineItems = payload.line_items ?? [];
+
+  for (const item of lineItems) {
+    if (!item.product_id) continue;
+
+    const productGid = `gid://shopify/Product/${item.product_id}`;
+
+    const results = await delistFromAllExcept(shop, productGid, "shopify");
+
+    for (const r of results) {
+      console.log(
+        `  ${r.success ? "OK" : "FAIL"}  Delist ${r.marketplace} for product ${item.product_id}`,
+      );
+    }
+  }
 
   return new Response();
 };
