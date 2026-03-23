@@ -1,14 +1,16 @@
 /**
  * eBay Browse API product import.
  *
- * Ported from reference/import-from-ebay.js.
  * Fetches items by eBay item ID and extracts card data from item specifics.
  */
 
 import { getEbayBrowseItem } from "../ebay-client.server";
 import type { EbayBrowseItem } from "../ebay-client.server";
 import { parseGraderFromTitle } from "./csv-parser.server";
+import { sleep } from "./product-builder.server";
 import type { ParsedCard } from "./types";
+
+const BROWSE_API_DELAY_MS = 200;
 
 // Known item specific names from eBay Pokémon card listings
 const ITEM_SPECIFIC_KEYS: Record<string, string[]> = {
@@ -114,6 +116,7 @@ export function extractCardDataFromEbayItem(
 
     isDuplicate: false,
     duplicateProductId: null,
+    dedupUnavailable: false,
     parseErrors: [],
     selected: true,
   };
@@ -139,6 +142,10 @@ export async function fetchEbayItems(
         itemId,
         error: err instanceof Error ? err.message : String(err),
       });
+    }
+
+    if (i < itemIds.length - 1) {
+      await sleep(BROWSE_API_DELAY_MS);
     }
   }
 

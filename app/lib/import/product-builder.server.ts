@@ -1,21 +1,12 @@
 /**
  * Shopify product creation logic for card imports.
  *
- * Ported from reference/helpers/product-builder.js.
  * Builds productSet inputs from ParsedCard data and handles
  * Shopify GraphQL mutations via the embedded app admin client.
  */
 
 import type { ParsedCard, ImportResult } from "./types";
-
-// ── Types ────────────────────────────────────────────────────────────────────
-
-interface AdminClient {
-  graphql: (
-    query: string,
-    options?: { variables?: Record<string, unknown> },
-  ) => Promise<Response>;
-}
+import type { AdminClient } from "../../types/admin";
 
 export interface StoreData {
   collectionMap: Record<string, string>;
@@ -23,11 +14,8 @@ export interface StoreData {
   publicationInputs: Array<{ publicationId: string }>;
 }
 
-export interface CreateProductOptions {
-  collectionMap: Record<string, string>;
-  locationId: string | null;
-  publicationInputs: Array<{ publicationId: string }>;
-  status: string;
+export interface CreateProductOptions extends StoreData {
+  status: "active" | "draft";
   rotateNewArrivals: boolean;
   existingId?: string;
 }
@@ -186,6 +174,9 @@ export function buildTitle(card: ParsedCard): string {
   if (card.setName) parts.push(card.setName);
   if (card.number) parts.push(`#${card.number}`);
 
+  // No structured parts available — use the raw title as-is
+  if (parts.length === 0) return card.title;
+
   let title = parts.join(" - ");
 
   if (card.language !== "English") {
@@ -196,7 +187,7 @@ export function buildTitle(card: ParsedCard): string {
     title += ` ${card.grader} ${card.grade}`;
   }
 
-  return title || card.title;
+  return title;
 }
 
 export function buildTags(
@@ -320,7 +311,7 @@ export function buildProductSetInput(
   const handle = card.customLabel ? slugify(card.customLabel) : slugify(title);
   const tags = buildTags(card, opts.rotateNewArrivals);
 
-  // finalPrice already has discount applied; ebayPrice is the market comp
+  // finalPrice is the price to use on Shopify; ebayPrice is the original eBay listing price used for compare-at pricing
   const shopifyPrice =
     card.finalPrice > 0 ? card.finalPrice.toFixed(2) : "0.00";
   const compareAtPrice =
@@ -402,24 +393,37 @@ export function buildProductSetInput(
 
 export async function fetchStoreData(admin: AdminClient): Promise<StoreData> {
   const collectionMap: Record<string, string> = {};
-  const colRes = await admin.graphql(COLLECTIONS_QUERY);
-  const colData = await colRes.json();
-  for (const edge of colData.data.collections.edges) {
-    collectionMap[edge.node.handle] = edge.node.id;
+  try {
+    const colRes = await admin.graphql(COLLECTIONS_QUERY);
+    const colData = await colRes.json();
+    for (const edge of colData.data?.collections?.edges ?? []) {
+      collectionMap[edge.node.handle] = edge.node.id;
+    }
+  } catch (err) {
+    console.error("Failed to fetch collections from Shopify:", err);
   }
 
   let locationId: string | null = null;
-  const locRes = await admin.graphql(LOCATIONS_QUERY);
-  const locData = await locRes.json();
-  if (locData.data.locations.edges.length > 0) {
-    locationId = locData.data.locations.edges[0].node.id;
+  try {
+    const locRes = await admin.graphql(LOCATIONS_QUERY);
+    const locData = await locRes.json();
+    const edges = locData.data?.locations?.edges ?? [];
+    if (edges.length > 0) {
+      locationId = edges[0].node.id;
+    }
+  } catch (err) {
+    console.error("Failed to fetch locations from Shopify:", err);
   }
 
   const publicationInputs: Array<{ publicationId: string }> = [];
-  const pubRes = await admin.graphql(PUBLICATIONS_QUERY);
-  const pubData = await pubRes.json();
-  for (const edge of pubData.data.publications.edges) {
-    publicationInputs.push({ publicationId: edge.node.id });
+  try {
+    const pubRes = await admin.graphql(PUBLICATIONS_QUERY);
+    const pubData = await pubRes.json();
+    for (const edge of pubData.data?.publications?.edges ?? []) {
+      publicationInputs.push({ publicationId: edge.node.id });
+    }
+  } catch (err) {
+    console.error("Failed to fetch publications from Shopify:", err);
   }
 
   return { collectionMap, locationId, publicationInputs };
@@ -467,8 +471,11 @@ export async function createProduct(
             input: opts.publicationInputs,
           },
         });
-      } catch {
-        // Non-fatal: product was created, just not published
+      } catch (publishErr) {
+        console.error(
+          `Product ${product.id} created but publish failed:`,
+          publishErr instanceof Error ? publishErr.message : publishErr,
+        );
       }
     }
 

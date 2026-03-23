@@ -207,15 +207,33 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         where: { shopId: shop, marketplace: "ebay" },
       }),
     ]);
-    return { disconnected: true };
+    return Response.json({ disconnected: true });
   }
 
-  if (intent === "create-policies") {
-    const account = await db.marketplaceAccount.findFirst({
-      where: { shopId: session.shop, marketplace: "ebay" },
-    });
-    if (!account) return Response.json({ error: "Not connected" }, { status: 400 });
+  if (intent === "reconcile") {
+    try {
+      const result = await reconcileShop(shop, admin);
+      return Response.json({
+        success: true,
+        message: `Reconciled: ${result.delisted} delisted, ${result.relisted} relisted, ${result.errors} errors`,
+        ...result,
+      });
+    } catch (err) {
+      console.error("Reconciliation failed:", err);
+      return Response.json(
+        { error: err instanceof Error ? err.message : "Reconciliation failed" },
+        { status: 500 },
+      );
+    }
+  }
 
+  // All remaining intents require a connected eBay account
+  const account = await db.marketplaceAccount.findFirst({
+    where: { shopId: shop, marketplace: "ebay" },
+  });
+  if (!account) return Response.json({ error: "Not connected" }, { status: 400 });
+
+  if (intent === "create-policies") {
     const { createFulfillmentPolicy, createPaymentPolicy, createReturnPolicy } =
       await import("../lib/ebay-policies.server");
 
@@ -240,11 +258,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "save-policies") {
-    const account = await db.marketplaceAccount.findFirst({
-      where: { shopId: session.shop, marketplace: "ebay" },
-    });
-    if (!account) return Response.json({ error: "Not connected" }, { status: 400 });
-
     const currentSettings = (account.settings ?? {}) as Record<string, unknown>;
     await db.marketplaceAccount.update({
       where: { id: account.id },
@@ -262,11 +275,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "toggle-shadow") {
-    const account = await db.marketplaceAccount.findFirst({
-      where: { shopId: session.shop, marketplace: "ebay" },
-    });
-    if (!account) return Response.json({ error: "Not connected" }, { status: 400 });
-
     const currentSettings = (account.settings ?? {}) as Record<string, unknown>;
     const newShadowMode = !(currentSettings.shadowMode === true);
     await db.marketplaceAccount.update({
@@ -280,11 +288,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "toggle-inventory-sync") {
-    const account = await db.marketplaceAccount.findFirst({
-      where: { shopId: session.shop, marketplace: "ebay" },
-    });
-    if (!account) return Response.json({ error: "Not connected" }, { status: 400 });
-
     const currentSettings = (account.settings ?? {}) as Record<string, unknown>;
     const newValue = !(currentSettings.inventorySyncEnabled !== false);
     await db.marketplaceAccount.update({
@@ -295,11 +298,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "toggle-cross-channel-delist") {
-    const account = await db.marketplaceAccount.findFirst({
-      where: { shopId: session.shop, marketplace: "ebay" },
-    });
-    if (!account) return Response.json({ error: "Not connected" }, { status: 400 });
-
     const currentSettings = (account.settings ?? {}) as Record<string, unknown>;
     const newValue = !(currentSettings.crossChannelDelistEnabled !== false);
     await db.marketplaceAccount.update({
@@ -309,64 +307,58 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return Response.json({ success: true });
   }
 
-  if (intent === "reconcile") {
-    const result = await reconcileShop(shop, admin);
-    return Response.json({
-      success: true,
-      message: `Reconciled: ${result.delisted} delisted, ${result.relisted} relisted, ${result.errors} errors`,
-      ...result,
-    });
-  }
-
   if (intent === "import-listings") {
-    const account = await db.marketplaceAccount.findFirst({
-      where: { shopId: session.shop, marketplace: "ebay" },
-    });
-    if (!account) return Response.json({ error: "Not connected" }, { status: 400 });
 
     const products = await getAllProducts(admin, { query: "status:active" });
     const results = { imported: 0, skipped: 0, notFound: [] as string[] };
 
+    const errors: string[] = [];
     for (const p of products) {
       if (!p.variant) continue;
 
       const productId = p.product.id as string;
       const sku = (p.variant.sku as string) || `CY-${productId.split("/").pop()}`;
 
-      const existing = await db.marketplaceListing.findUnique({
-        where: {
-          shopId_shopifyProductId_marketplace: {
+      try {
+        const existing = await db.marketplaceListing.findUnique({
+          where: {
+            shopId_shopifyProductId_marketplace: {
+              shopId: session.shop,
+              shopifyProductId: productId,
+              marketplace: "ebay",
+            },
+          },
+        });
+        if (existing) {
+          results.skipped++;
+          continue;
+        }
+
+        const item = await getInventoryItem(sku, account);
+        if (!item) {
+          results.notFound.push(`${p.product.title} (SKU: ${sku})`);
+          continue;
+        }
+
+        const offer = await getOffersForSku(sku, account);
+
+        await db.marketplaceListing.create({
+          data: {
             shopId: session.shop,
             shopifyProductId: productId,
             marketplace: "ebay",
+            marketplaceId: offer?.listingId ?? "",
+            offerId: offer?.offerId ?? "",
+            status: "active",
+            lastSyncedAt: new Date(),
           },
-        },
-      });
-      if (existing) {
-        results.skipped++;
-        continue;
+        });
+        results.imported++;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        errors.push(`${p.product.title} (SKU: ${sku}): ${message}`);
+        console.error(`Import listing failed for SKU ${sku}:`, message);
       }
-
-      const item = await getInventoryItem(sku, account);
-      if (!item) {
-        results.notFound.push(`${p.product.title} (SKU: ${sku})`);
-        continue;
-      }
-
-      const offer = await getOffersForSku(sku, account);
-
-      await db.marketplaceListing.create({
-        data: {
-          shopId: session.shop,
-          shopifyProductId: productId,
-          marketplace: "ebay",
-          marketplaceId: offer?.listingId ?? "",
-          offerId: offer?.offerId ?? "",
-          status: "active",
-          lastSyncedAt: new Date(),
-        },
-      });
-      results.imported++;
 
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
@@ -376,19 +368,21 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         shopId: session.shop,
         marketplace: "ebay",
         action: "import",
-        status: "success",
-        details: JSON.stringify(results),
+        status: errors.length > 0 ? "error" : "success",
+        details: JSON.stringify({ ...results, errors }),
       },
     });
 
+    const parts = [`Imported ${results.imported} listings`, `${results.skipped} already tracked`, `${results.notFound.length} not found on eBay`];
+    if (errors.length > 0) parts.push(`${errors.length} errors`);
     return Response.json({
-      success: true,
-      message: `Imported ${results.imported} listings. ${results.skipped} already tracked. ${results.notFound.length} not found on eBay.`,
+      success: errors.length === 0,
+      message: parts.join(". ") + ".",
       ...results,
     });
   }
 
-  return null;
+  return Response.json({ error: "Unknown intent" }, { status: 400 });
 };
 
 export default function EbaySettings() {
@@ -397,6 +391,7 @@ export default function EbaySettings() {
     listingCount,
     errorCount,
     pendingCount,
+    delistedCount,
     authUrl,
     tokenExpiry,
     recentErrors,
@@ -473,6 +468,9 @@ export default function EbaySettings() {
             </s-grid-item>
             <s-grid-item>
               <StatCard label="Pending" value={pendingCount} />
+            </s-grid-item>
+            <s-grid-item>
+              <StatCard label="Delisted" value={delistedCount} />
             </s-grid-item>
             <s-grid-item>
               <StatCard

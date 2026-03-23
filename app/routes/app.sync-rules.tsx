@@ -76,6 +76,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const discountRaw = formData.get("discountPercent")?.toString();
   const discountPercent = discountRaw ? parseFloat(discountRaw) : 5;
 
+  if (!Number.isFinite(discountPercent) || discountPercent < 0 || discountPercent > 100) {
+    return Response.json({ error: "Discount must be between 0 and 100", marketplace }, { status: 400 });
+  }
+
   const currentSettings = (account.settings ?? {}) as Record<string, unknown>;
   const newSettings: Prisma.InputJsonValue = {
     ...currentSettings,

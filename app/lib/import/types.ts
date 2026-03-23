@@ -24,11 +24,18 @@ export interface ParsedCard {
   // Pricing
   ebayPrice: number;
   apiSuggestedPrice: number | null;
+  /**
+   * The price that will be set on the Shopify product.
+   * Initialized to ebayPrice, potentially overridden by the pricing API,
+   * and may be manually edited by the user during import review.
+   */
   finalPrice: number;
 
   // Status
   isDuplicate: boolean;
   duplicateProductId: string | null;
+  /** True when the duplicate check could not be completed (API error). */
+  dedupUnavailable: boolean;
   parseErrors: string[];
   selected: boolean;
 }

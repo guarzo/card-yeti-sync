@@ -1,6 +1,6 @@
 import type { MarketplaceAccount } from "@prisma/client";
 
-interface AccountSettings {
+export interface AccountSettings {
   shadowMode: boolean;
   inventorySyncEnabled: boolean;
   crossChannelDelistEnabled: boolean;
@@ -24,7 +24,7 @@ export function getAccountSettings(
     crossChannelDelistEnabled: raw.crossChannelDelistEnabled !== false,
     discountPercent:
       typeof raw.discountPercent === "number" && Number.isFinite(raw.discountPercent)
-        ? raw.discountPercent
+        ? Math.max(0, Math.min(100, raw.discountPercent))
         : DEFAULTS.discountPercent,
   };
 }

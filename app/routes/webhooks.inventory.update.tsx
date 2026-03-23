@@ -51,11 +51,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return new Response();
   }
 
-  const ebayAccount = await db.marketplaceAccount.findUnique({
-    where: { shopId_marketplace: { shopId: shop, marketplace: "ebay" } },
+  // Check if any connected marketplace account has inventory sync enabled
+  const accounts = await db.marketplaceAccount.findMany({
+    where: { shopId: shop },
   });
-  if (ebayAccount && !getAccountSettings(ebayAccount).inventorySyncEnabled) {
-    console.log("Inventory sync disabled — skipping");
+  const anyInventorySyncEnabled = accounts.some(
+    (a) => getAccountSettings(a).inventorySyncEnabled,
+  );
+  if (accounts.length > 0 && !anyInventorySyncEnabled) {
+    console.log("Inventory sync disabled on all accounts — skipping");
     return new Response();
   }
 

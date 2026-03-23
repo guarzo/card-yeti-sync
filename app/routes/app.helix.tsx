@@ -97,7 +97,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           titleMap.set(node.id, node.title);
         }
       }
-    } catch {
+    } catch (err) {
+      console.error("Failed to fetch product titles for price suggestions:", err);
       // Fall back to using product IDs as titles
     }
   }

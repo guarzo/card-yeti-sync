@@ -1,60 +1,15 @@
 /**
  * eBay File Exchange CSV parser.
  *
- * Ported from tmp/upload-products-standalone.js and reference/helpers/csv-transforms.js.
  * Parses structured card data from eBay export CSVs into normalized ParsedCard objects.
  */
 
 import type { ParsedCard } from "./types";
+import { parseCSV } from "../csv-utils";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
 export const GRADERS = ["PSA", "CGC", "TAG", "BGS", "SGC", "ACE", "GMA", "MNT"];
-
-// ── CSV Parsing (RFC 4180) ───────────────────────────────────────────────────
-
-export function parseCSV(text: string): string[][] {
-  const rows: string[][] = [];
-  let field = "";
-  let inQuotes = false;
-  let row: string[] = [];
-
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    const next = text[i + 1];
-
-    if (inQuotes) {
-      if (ch === '"' && next === '"') {
-        field += '"';
-        i++;
-      } else if (ch === '"') {
-        inQuotes = false;
-      } else {
-        field += ch;
-      }
-    } else if (ch === '"') {
-      inQuotes = true;
-    } else if (ch === ",") {
-      row.push(field);
-      field = "";
-    } else if (ch === "\n" || (ch === "\r" && next === "\n")) {
-      row.push(field);
-      field = "";
-      rows.push(row);
-      row = [];
-      if (ch === "\r") i++;
-    } else {
-      field += ch;
-    }
-  }
-
-  if (field || row.length > 0) {
-    row.push(field);
-    rows.push(row);
-  }
-
-  return rows;
-}
 
 export function buildColumnIndex(headers: string[]): Record<string, number> {
   const col: Record<string, number> = {};
@@ -210,6 +165,7 @@ function parseEbayRow(
     // Status — will be set by dedup check
     isDuplicate: false,
     duplicateProductId: null,
+    dedupUnavailable: false,
     parseErrors: [],
     selected: true,
   };
@@ -241,12 +197,15 @@ export function parseEbayFileExchangeCSV(csvText: string): {
   const clean = csvText.replace(/^\uFEFF/, "");
   const rows = parseCSV(clean);
 
-  if (rows.length < 3) {
-    return { cards: [], totalRows: 0, skippedRows: 0, errors: ["CSV has no data rows (need at least 3 lines: metadata, headers, data)"] };
-  }
-
   // eBay File Exchange CSVs: line 1 = metadata ("Info,..."), line 2 = headers, line 3+ = data
-  const headerIdx = rows[0][0] === "Info" ? 1 : 0;
+  // Plain CSVs without the metadata row are also supported (headers + data)
+  const hasMetadataRow = rows.length > 0 && rows[0][0] === "Info";
+  const headerIdx = hasMetadataRow ? 1 : 0;
+  const minRows = hasMetadataRow ? 3 : 2; // metadata+headers+data or headers+data
+
+  if (rows.length < minRows) {
+    return { cards: [], totalRows: 0, skippedRows: 0, errors: ["CSV has no data rows"] };
+  }
   const headers = rows[headerIdx];
   const col = buildColumnIndex(headers);
 

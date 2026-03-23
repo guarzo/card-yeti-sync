@@ -9,11 +9,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   console.log(`Received ${topic} webhook for ${shop}`);
 
-  const ebayAccount = await db.marketplaceAccount.findUnique({
-    where: { shopId_marketplace: { shopId: shop, marketplace: "ebay" } },
+  // Check if any connected marketplace account has cross-channel delisting enabled
+  const accounts = await db.marketplaceAccount.findMany({
+    where: { shopId: shop },
   });
-  if (ebayAccount && !getAccountSettings(ebayAccount).crossChannelDelistEnabled) {
-    console.log("Cross-channel delisting disabled — skipping");
+  const anyCrossChannelEnabled = accounts.some(
+    (a) => getAccountSettings(a).crossChannelDelistEnabled,
+  );
+  if (accounts.length > 0 && !anyCrossChannelEnabled) {
+    console.log("Cross-channel delisting disabled on all accounts — skipping");
     return new Response();
   }
 

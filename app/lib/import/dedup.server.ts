@@ -1,35 +1,26 @@
 /**
  * Duplicate detection for product imports.
  *
- * Checks for existing products by handle (for CSV imports) and
- * by eBay item ID metafield (for eBay Browse API imports).
+ * Checks for existing products first by eBay item ID metafield (if present),
+ * then by product handle. Uses batched GraphQL queries to reduce API calls.
  */
 
 import type { ParsedCard } from "./types";
-import { buildTitle, slugify, sleep, DELAY_MS } from "./product-builder.server";
+import type { AdminClient } from "../../types/admin";
+import { buildTitle, slugify, sleep } from "./product-builder.server";
 
-interface AdminClient {
-  graphql: (
-    query: string,
-    options?: { variables?: Record<string, unknown> },
-  ) => Promise<Response>;
-}
+const BATCH_SIZE = 20;
+const BATCH_DELAY_MS = 200;
 
-const PRODUCT_BY_HANDLE_QUERY = `#graphql
-  query productByHandle($handle: String!) {
-    productByHandle(handle: $handle) {
-      id
-    }
-  }
-`;
-
-const PRODUCTS_BY_EBAY_ID_QUERY = `#graphql
-  query productsByEbayId($query: String!) {
-    products(first: 1, query: $query) {
+const BATCH_EBAY_ID_QUERY = `#graphql
+  query batchEbayIdLookup($query: String!) {
+    products(first: 250, query: $query) {
       edges {
         node {
           id
-          title
+          ebayItemId: metafield(namespace: "card", key: "ebay_item_id") {
+            value
+          }
         }
       }
     }
@@ -37,53 +28,101 @@ const PRODUCTS_BY_EBAY_ID_QUERY = `#graphql
 `;
 
 /**
- * Check each card for duplicates in Shopify.
- * Mutates the isDuplicate and duplicateProductId fields on each card.
+ * Build a single GraphQL query that looks up multiple handles via aliases.
+ */
+function buildBatchHandleQuery(handles: string[]): string {
+  const fields = handles.map((h, i) => {
+    const escaped = h.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    return `h${i}: productByHandle(handle: "${escaped}") { id }`;
+  });
+  return `#graphql\n  query {\n    ${fields.join("\n    ")}\n  }`;
+}
+
+/**
+ * Check cards for duplicates in Shopify using batched queries.
+ * Mutates the isDuplicate, duplicateProductId, and dedupUnavailable fields.
  */
 export async function checkDuplicates(
   admin: AdminClient,
   cards: ParsedCard[],
 ): Promise<ParsedCard[]> {
-  for (const card of cards) {
+  // Phase 1: Batch check by eBay item ID metafield
+  const cardsWithEbayId = cards.filter((c) => c.ebayItemId);
+  for (let i = 0; i < cardsWithEbayId.length; i += BATCH_SIZE) {
+    const batch = cardsWithEbayId.slice(i, i + BATCH_SIZE);
     try {
-      // Strategy 1: Check by eBay item ID metafield (most reliable for eBay imports)
-      if (card.ebayItemId) {
-        const res = await admin.graphql(PRODUCTS_BY_EBAY_ID_QUERY, {
-          variables: {
-            query: `metafields.card.ebay_item_id:"${card.ebayItemId}"`,
-          },
-        });
-        const data = await res.json();
-        const edges = data.data?.products?.edges ?? [];
-        if (edges.length > 0) {
-          card.isDuplicate = true;
-          card.duplicateProductId = edges[0].node.id;
-          card.selected = false;
-          await sleep(DELAY_MS);
-          continue;
-        }
-      }
-
-      // Strategy 2: Check by product handle
-      const title = buildTitle(card);
-      const handle = card.customLabel
-        ? slugify(card.customLabel)
-        : slugify(title);
-
-      const res = await admin.graphql(PRODUCT_BY_HANDLE_QUERY, {
-        variables: { handle },
+      const queryParts = batch.map(
+        (c) => `metafields.card.ebay_item_id:"${c.ebayItemId.replace(/"/g, '\\"')}"`,
+      );
+      const res = await admin.graphql(BATCH_EBAY_ID_QUERY, {
+        variables: { query: queryParts.join(" OR ") },
       });
       const data = await res.json();
-      if (data.data?.productByHandle) {
-        card.isDuplicate = true;
-        card.duplicateProductId = data.data.productByHandle.id;
-        card.selected = false;
+      const edges = data.data?.products?.edges ?? [];
+
+      // Build a set of found eBay IDs for matching
+      const foundIds = new Map<string, string>();
+      for (const edge of edges) {
+        const ebayId = edge.node.ebayItemId?.value;
+        if (ebayId) foundIds.set(ebayId, edge.node.id);
       }
-    } catch {
-      // Non-fatal: if dedup check fails, treat as non-duplicate
+
+      for (const card of batch) {
+        const productId = foundIds.get(card.ebayItemId);
+        if (productId) {
+          card.isDuplicate = true;
+          card.duplicateProductId = productId;
+          card.selected = false;
+        }
+      }
+    } catch (err) {
+      console.error("Batch dedup by eBay ID failed:", err);
+      for (const card of batch) {
+        card.dedupUnavailable = true;
+        card.parseErrors.push(
+          `Duplicate check failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        );
+      }
     }
 
-    await sleep(DELAY_MS);
+    if (i + BATCH_SIZE < cardsWithEbayId.length) await sleep(BATCH_DELAY_MS);
+  }
+
+  // Phase 2: Batch check by handle for cards not already resolved
+  const remainingCards = cards.filter(
+    (c) => !c.isDuplicate && !c.dedupUnavailable,
+  );
+  for (let i = 0; i < remainingCards.length; i += BATCH_SIZE) {
+    const batch = remainingCards.slice(i, i + BATCH_SIZE);
+    const handles = batch.map((c) => {
+      const title = buildTitle(c);
+      return c.customLabel ? slugify(c.customLabel) : slugify(title);
+    });
+
+    try {
+      const query = buildBatchHandleQuery(handles);
+      const res = await admin.graphql(query);
+      const data = await res.json();
+
+      for (let j = 0; j < batch.length; j++) {
+        const result = data.data?.[`h${j}`];
+        if (result) {
+          batch[j].isDuplicate = true;
+          batch[j].duplicateProductId = result.id;
+          batch[j].selected = false;
+        }
+      }
+    } catch (err) {
+      console.error("Batch dedup by handle failed:", err);
+      for (const card of batch) {
+        card.dedupUnavailable = true;
+        card.parseErrors.push(
+          `Duplicate check failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        );
+      }
+    }
+
+    if (i + BATCH_SIZE < remainingCards.length) await sleep(BATCH_DELAY_MS);
   }
 
   return cards;

@@ -1,6 +1,7 @@
 import type { MarketplaceAccount } from "@prisma/client";
 
 import db from "../db.server";
+import type { AdminClient } from "../types/admin";
 import * as ebayAdapter from "./adapters/ebay.server";
 import { isShadowMode } from "./shadow-mode.server";
 import type { CardMetafields } from "./shopify-helpers.server";
@@ -13,7 +14,8 @@ type SyncResult = {
 };
 
 /**
- * Delist a product from all marketplaces except the one where it sold.
+ * Delist a product from all active marketplace listings.
+ * Optionally exclude a specific marketplace (e.g., the one where it sold).
  */
 export async function delistFromAllExcept(
   shopId: string,
@@ -90,7 +92,8 @@ export async function delistFromAllExcept(
 }
 
 /**
- * Relist a product on all marketplaces where it was previously delisted.
+ * Mark previously delisted listings as pending for relisting.
+ * Note: this updates the database state only; no external marketplace API calls are made.
  */
 export async function relistAll(
   shopId: string,
@@ -200,7 +203,7 @@ const INVENTORY_QUERY = `
  */
 export async function reconcileShop(
   shopId: string,
-  admin: { graphql: (query: string, options?: { variables: Record<string, unknown> }) => Promise<Response> },
+  admin: AdminClient,
 ): Promise<ReconcileResult> {
   let shopDelisted = 0;
   let shopRelisted = 0;
@@ -224,6 +227,7 @@ export async function reconcileShop(
   ];
 
   const inventoryByProduct = new Map<string, number>();
+  let queryFailures = 0;
   for (const productId of productIds) {
     try {
       const response = await admin.graphql(INVENTORY_QUERY, {
@@ -232,34 +236,58 @@ export async function reconcileShop(
       const { data } = (await response.json()) as {
         data: { product: { totalInventory: number } | null };
       };
-      inventoryByProduct.set(productId, data.product?.totalInventory ?? 0);
-    } catch {
-      inventoryByProduct.set(productId, 0);
+      if (data.product === null) {
+        // Product genuinely deleted — treat as 0
+        inventoryByProduct.set(productId, 0);
+      } else {
+        inventoryByProduct.set(productId, data.product.totalInventory ?? 0);
+      }
+    } catch (err) {
+      queryFailures++;
+      console.error(`Failed to fetch inventory for ${productId}:`, err);
+      // Do NOT set to 0 — skip this product to avoid false delisting
     }
   }
 
+  // Abort if too many queries failed (likely systemic issue like API outage)
+  if (queryFailures > 0 && queryFailures >= productIds.length * 0.5) {
+    throw new Error(
+      `Reconciliation aborted: ${queryFailures}/${productIds.length} inventory queries failed. Possible API outage.`,
+    );
+  }
+
   for (const listing of activeListings) {
-    const qty = inventoryByProduct.get(listing.shopifyProductId) ?? 0;
+    const qty = inventoryByProduct.get(listing.shopifyProductId);
+    if (qty === undefined) continue; // Query failed — skip rather than falsely delist
     if (qty === 0) {
       try {
         const results = await delistFromAllExcept(shopId, listing.shopifyProductId);
         shopDelisted += results.filter((r) => r.success).length;
         shopErrors += results.filter((r) => !r.success).length;
-      } catch {
+      } catch (err) {
         shopErrors++;
+        console.error(
+          `Failed to delist product ${listing.shopifyProductId}:`,
+          err instanceof Error ? err.message : err,
+        );
       }
     }
   }
 
   for (const listing of delistedListings) {
-    const qty = inventoryByProduct.get(listing.shopifyProductId) ?? 0;
+    const qty = inventoryByProduct.get(listing.shopifyProductId);
+    if (qty === undefined) continue; // Query failed — skip
     if (qty > 0) {
       try {
         const results = await relistAll(shopId, listing.shopifyProductId);
         shopRelisted += results.filter((r) => r.success).length;
         shopErrors += results.filter((r) => !r.success).length;
-      } catch {
+      } catch (err) {
         shopErrors++;
+        console.error(
+          `Failed to relist product ${listing.shopifyProductId}:`,
+          err instanceof Error ? err.message : err,
+        );
       }
     }
   }

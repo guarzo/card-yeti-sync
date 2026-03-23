@@ -7,13 +7,7 @@ import db from "../db.server";
 import { getAllProducts } from "./shopify-helpers.server";
 import { fetchPriceBatch } from "./pricing-api.server";
 import { getAccountSettings } from "./account-settings.server";
-
-interface AdminClient {
-  graphql: (
-    query: string,
-    options?: { variables: Record<string, unknown> },
-  ) => Promise<Response>;
-}
+import type { AdminClient } from "../types/admin";
 
 export interface FetchPriceResult {
   created: number;

@@ -27,6 +27,41 @@ import type {
   ImportResult,
 } from "../lib/import/types";
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+async function enrichWithPricing(cards: ParsedCard[]): Promise<boolean> {
+  if (!isPricingApiConfigured()) return false;
+
+  const certNumbers = cards
+    .filter((c) => c.isGraded && c.certNumber)
+    .map((c) => c.certNumber);
+
+  if (certNumbers.length === 0) return false;
+
+  try {
+    const priceData = await fetchPriceBatch(certNumbers);
+    const priceMap = new Map(
+      priceData.results.map((r) => [r.certNumber, r.suggestedPrice]),
+    );
+
+    for (const card of cards) {
+      if (card.certNumber && priceMap.has(card.certNumber)) {
+        const apiPrice = priceMap.get(card.certNumber)!;
+        card.apiSuggestedPrice = apiPrice;
+        card.finalPrice = apiPrice;
+      }
+    }
+    return true;
+  } catch (err) {
+    console.error(
+      "Pricing API failed during import:",
+      err instanceof Error ? err.message : err,
+    );
+    // Non-fatal: fall back to eBay prices
+    return false;
+  }
+}
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 interface LoaderData {
@@ -74,32 +109,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     // Enrich with pricing API
-    let pricingApiUsed = false;
-    if (isPricingApiConfigured()) {
-      const certNumbers = cards
-        .filter((c) => c.isGraded && c.certNumber)
-        .map((c) => c.certNumber);
-
-      if (certNumbers.length > 0) {
-        try {
-          const priceData = await fetchPriceBatch(certNumbers);
-          const priceMap = new Map(
-            priceData.results.map((r) => [r.certNumber, r.suggestedPrice]),
-          );
-
-          for (const card of cards) {
-            if (card.certNumber && priceMap.has(card.certNumber)) {
-              const apiPrice = priceMap.get(card.certNumber)!;
-              card.apiSuggestedPrice = apiPrice;
-              card.finalPrice = apiPrice;
-            }
-          }
-          pricingApiUsed = true;
-        } catch {
-          // Non-fatal: fall back to eBay prices
-        }
-      }
-    }
+    const pricingApiUsed = await enrichWithPricing(cards);
 
     // Check for duplicates
     await checkDuplicates(admin, cards);
@@ -150,32 +160,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     // Enrich with pricing API
-    let pricingApiUsed = false;
-    if (isPricingApiConfigured()) {
-      const certNumbers = cards
-        .filter((c) => c.isGraded && c.certNumber)
-        .map((c) => c.certNumber);
-
-      if (certNumbers.length > 0) {
-        try {
-          const priceData = await fetchPriceBatch(certNumbers);
-          const priceMap = new Map(
-            priceData.results.map((r) => [r.certNumber, r.suggestedPrice]),
-          );
-
-          for (const card of cards) {
-            if (card.certNumber && priceMap.has(card.certNumber)) {
-              const apiPrice = priceMap.get(card.certNumber)!;
-              card.apiSuggestedPrice = apiPrice;
-              card.finalPrice = apiPrice;
-            }
-          }
-          pricingApiUsed = true;
-        } catch {
-          // Non-fatal
-        }
-      }
-    }
+    const pricingApiUsed = await enrichWithPricing(cards);
 
     await checkDuplicates(admin, cards);
 
@@ -195,8 +180,32 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return { error: "No cards data provided" };
     }
 
-    const selectedCards: ParsedCard[] = JSON.parse(cardsJson);
-    const status = (formData.get("status") as string) || "active";
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(cardsJson);
+    } catch {
+      return { error: "Invalid cards data" };
+    }
+    if (!Array.isArray(parsed)) {
+      return { error: "Invalid cards data: expected an array" };
+    }
+    const selectedCards: ParsedCard[] = [];
+    for (const item of parsed) {
+      if (
+        typeof item !== "object" || item === null ||
+        typeof item.sourceId !== "string" ||
+        typeof item.title !== "string" ||
+        typeof item.finalPrice !== "number" || !Number.isFinite(item.finalPrice) || item.finalPrice < 0
+      ) {
+        continue; // skip malformed entries
+      }
+      selectedCards.push(item as ParsedCard);
+    }
+    if (selectedCards.length === 0) {
+      return { error: "No valid cards to import" };
+    }
+    const statusRaw = (formData.get("status") as string) || "active";
+    const status: "active" | "draft" = statusRaw === "draft" ? "draft" : "active";
     const rotateNewArrivals = formData.get("rotateNewArrivals") === "true";
 
     const storeData = await fetchStoreData(admin);
@@ -250,8 +259,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             }),
           },
         });
-      } catch {
-        // Non-fatal
+      } catch (logErr) {
+        console.error(
+          `Failed to write sync log for ${result.title}:`,
+          logErr instanceof Error ? logErr.message : logErr,
+        );
       }
 
       await sleep(DELAY_MS);
@@ -468,6 +480,33 @@ export default function ImportPage() {
               </>
             )}
           </s-banner>
+
+          {/* Parse warnings — dedup failures, per-card errors */}
+          {(() => {
+            const cardsWithErrors = parsedCards.filter((c) => c.parseErrors.length > 0);
+            const dedupUnavailableCount = parsedCards.filter((c) => c.dedupUnavailable).length;
+            if (cardsWithErrors.length === 0) return null;
+            return (
+              <s-banner tone="warning" dismissible>
+                <s-stack direction="block" gap="small">
+                  <s-text type="strong">
+                    {cardsWithErrors.length} item{cardsWithErrors.length !== 1 ? "s" : ""} had warnings
+                    {dedupUnavailableCount > 0 && ` (${dedupUnavailableCount} could not be checked for duplicates)`}
+                  </s-text>
+                  <ul style={{ margin: 0, paddingLeft: "1.2em", fontSize: "13px" }}>
+                    {cardsWithErrors.slice(0, 10).map((c) => (
+                      <li key={c.sourceId}>
+                        {c.pokemon || c.title.substring(0, 30)}: {c.parseErrors.join("; ")}
+                      </li>
+                    ))}
+                    {cardsWithErrors.length > 10 && (
+                      <li>...and {cardsWithErrors.length - 10} more</li>
+                    )}
+                  </ul>
+                </s-stack>
+              </s-banner>
+            );
+          })()}
 
           {/* Review table */}
           <ImportReviewTable

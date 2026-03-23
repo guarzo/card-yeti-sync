@@ -1,6 +1,6 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
-import { escapeCSVField } from "../lib/csv-utils";
+import { escapeCSVField, parseCSV } from "../lib/csv-utils";
 import db from "../db.server";
 import { getAccountSettings } from "../lib/account-settings.server";
 
@@ -41,31 +41,6 @@ const VARIANT_UPDATE_MUTATION = `
   }
 `;
 
-function parseCSV(text: string): string[][] {
-  const rows: string[][] = [];
-  let field = "";
-  let inQuotes = false;
-  let row: string[] = [];
-
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    const next = text[i + 1];
-
-    if (inQuotes) {
-      if (ch === '"' && next === '"') { field += '"'; i++; }
-      else if (ch === '"') { inQuotes = false; }
-      else { field += ch; }
-    } else if (ch === '"') { inQuotes = true; }
-    else if (ch === ",") { row.push(field); field = ""; }
-    else if (ch === "\n" || (ch === "\r" && next === "\n")) {
-      row.push(field); field = ""; rows.push(row); row = [];
-      if (ch === "\r") i++;
-    } else { field += ch; }
-  }
-
-  if (field || row.length > 0) { row.push(field); rows.push(row); }
-  return rows;
-}
 
 interface ProductNode {
   id: string;
