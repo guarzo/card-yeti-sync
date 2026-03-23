@@ -1,0 +1,10 @@
+{
+  "name": "Marketplace Sync Status",
+  "heading": "Marketplace Sync",
+  "loading": "Loading sync status...",
+  "noMarketplaces": "No marketplaces connected",
+  "notListed": "Not listed",
+  "lastSynced": "Last synced",
+  "error": "Error",
+  "never": "Never"
+}

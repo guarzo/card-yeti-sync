@@ -1,4 +1,7 @@
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
 
 name: CI
 
@@ -6,14 +9,34 @@ jobs:
   CI:
     name: CI
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: "postgresql://ci:ci@localhost:5432/ci"
+
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20.19
+          cache: 'npm'
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Run TypeScript type checking
         run: npx tsc --noEmit
@@ -23,6 +46,15 @@ jobs:
 
       - name: Validate Prisma
         run: npx prisma generate && npx prisma validate
+
+      - name: Create shadow database
+        run: PGPASSWORD=ci createdb -h localhost -U ci ci_shadow
+
+      - name: Check Prisma migration drift
+        run: npx prisma migrate diff --from-schema-datamodel prisma/schema.prisma --to-migrations prisma/migrations --shadow-database-url "postgresql://ci:ci@localhost:5432/ci_shadow" --exit-code
+
+      - name: Run tests
+        run: npm test
 
       - name: Build application
         run: npm run build

@@ -6,7 +6,7 @@ import type {
   ActionFunctionArgs,
   MetaFunction,
 } from "react-router";
-import { useLoaderData, useSearchParams, useRouteError } from "react-router";
+import { Form, useLoaderData, useSearchParams, useRouteError } from "react-router";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { getAuthorizationUrl } from "../lib/ebay-client.server";
@@ -25,6 +25,21 @@ interface ErrorListing {
   updatedAt: string;
 }
 
+interface ShadowLogEntry {
+  action: string;
+  productId: string | null;
+  status: string;
+  details: string | null;
+  createdAt: string;
+}
+
+interface ShadowStats {
+  total: number;
+  matches: number;
+  discrepancies: number;
+  recent: ShadowLogEntry[];
+}
+
 interface LoaderData {
   connected: boolean;
   authUrl: string;
@@ -35,6 +50,8 @@ interface LoaderData {
   delistedCount: number;
   recentErrors: ErrorListing[];
   productTitles: Record<string, string>;
+  shadowMode: boolean;
+  shadowStats: ShadowStats;
 }
 
 export const meta: MetaFunction = () => [{ title: "eBay | Card Yeti Sync" }];
@@ -122,6 +139,29 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const state = generateHmacState(shop, nonce);
   const authUrl = getAuthorizationUrl(state);
 
+  const accountSettings = (account?.settings ?? {}) as Record<string, unknown>;
+  const shadowMode = accountSettings.shadowMode === true;
+
+  let shadowStats: ShadowStats = { total: 0, matches: 0, discrepancies: 0, recent: [] };
+  if (shadowMode) {
+    const shadowLogs = await db.syncLog.findMany({
+      where: { shopId: shop, marketplace: "ebay", action: { startsWith: "shadow_" } },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+      select: { action: true, productId: true, status: true, details: true, createdAt: true },
+    });
+
+    shadowStats = {
+      total: shadowLogs.length,
+      matches: shadowLogs.filter((l) => l.status === "success").length,
+      discrepancies: shadowLogs.filter((l) => l.status === "error").length,
+      recent: shadowLogs.slice(0, 10).map((l) => ({
+        ...l,
+        createdAt: l.createdAt.toISOString(),
+      })),
+    };
+  }
+
   return {
     connected: !!account,
     listingCount,
@@ -135,6 +175,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       updatedAt: e.updatedAt.toISOString(),
     })),
     productTitles,
+    shadowMode,
+    shadowStats,
   } satisfies LoaderData;
 };
 
@@ -158,6 +200,75 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return { disconnected: true };
   }
 
+  if (intent === "create-policies") {
+    const account = await db.marketplaceAccount.findFirst({
+      where: { shopId: session.shop, marketplace: "ebay" },
+    });
+    if (!account) return Response.json({ error: "Not connected" }, { status: 400 });
+
+    const { createFulfillmentPolicy, createPaymentPolicy, createReturnPolicy } =
+      await import("../lib/ebay-policies.server");
+
+    const fulfillment = await createFulfillmentPolicy(account);
+    const payment = await createPaymentPolicy(account);
+    const returnPolicy = await createReturnPolicy(account);
+
+    const currentSettings = (account.settings ?? {}) as Record<string, unknown>;
+    await db.marketplaceAccount.update({
+      where: { id: account.id },
+      data: {
+        settings: {
+          ...currentSettings,
+          fulfillmentPolicyId: fulfillment.policyId,
+          paymentPolicyId: payment.policyId,
+          returnPolicyId: returnPolicy.policyId,
+        },
+      },
+    });
+
+    return Response.json({ success: true });
+  }
+
+  if (intent === "save-policies") {
+    const account = await db.marketplaceAccount.findFirst({
+      where: { shopId: session.shop, marketplace: "ebay" },
+    });
+    if (!account) return Response.json({ error: "Not connected" }, { status: 400 });
+
+    const currentSettings = (account.settings ?? {}) as Record<string, unknown>;
+    await db.marketplaceAccount.update({
+      where: { id: account.id },
+      data: {
+        settings: {
+          ...currentSettings,
+          fulfillmentPolicyId: formData.get("fulfillmentPolicyId")?.toString() ?? null,
+          paymentPolicyId: formData.get("paymentPolicyId")?.toString() ?? null,
+          returnPolicyId: formData.get("returnPolicyId")?.toString() ?? null,
+        },
+      },
+    });
+
+    return Response.json({ success: true });
+  }
+
+  if (intent === "toggle-shadow") {
+    const account = await db.marketplaceAccount.findFirst({
+      where: { shopId: session.shop, marketplace: "ebay" },
+    });
+    if (!account) return Response.json({ error: "Not connected" }, { status: 400 });
+
+    const currentSettings = (account.settings ?? {}) as Record<string, unknown>;
+    const newShadowMode = !(currentSettings.shadowMode === true);
+    await db.marketplaceAccount.update({
+      where: { id: account.id },
+      data: {
+        settings: { ...currentSettings, shadowMode: newShadowMode },
+      },
+    });
+
+    return Response.json({ success: true, shadowMode: newShadowMode });
+  }
+
   return null;
 };
 
@@ -167,11 +278,12 @@ export default function EbaySettings() {
     listingCount,
     errorCount,
     pendingCount,
-    delistedCount,
     authUrl,
     tokenExpiry,
     recentErrors,
     productTitles,
+    shadowMode,
+    shadowStats,
   } = useLoaderData<typeof loader>();
   const [searchParams] = useSearchParams();
   const success = searchParams.get("success");
@@ -202,6 +314,20 @@ export default function EbaySettings() {
       {error === "oauth_denied" && (
         <s-banner tone="critical" dismissible>
           eBay authorization was denied or failed. Please try again.
+        </s-banner>
+      )}
+
+      {shadowMode && (
+        <s-banner tone="warning">
+          <s-stack direction="block" gap="small">
+            <s-text type="strong">Shadow Mode Active</s-text>
+            <s-text>
+              eBay write operations are disabled. Card Yeti is logging what it
+              would do and comparing against actual eBay state.
+              {shadowStats.total > 0 &&
+                ` ${shadowStats.total} actions logged: ${shadowStats.matches} matches, ${shadowStats.discrepancies} discrepancies.`}
+            </s-text>
+          </s-stack>
         </s-banner>
       )}
 
@@ -265,6 +391,44 @@ export default function EbaySettings() {
           </s-grid>
         </ConnectionCard>
       </s-section>
+
+      {/* Shadow Activity */}
+      {shadowMode && shadowStats.recent.length > 0 && (
+        <s-section heading="Shadow Activity">
+          <s-paragraph color="subdued">
+            Recent actions Card Yeti would have taken on eBay. Matches mean
+            Marketplace Connector is producing the same result.
+          </s-paragraph>
+          <s-table variant="list">
+            <s-table-header-row>
+              <s-table-header>Action</s-table-header>
+              <s-table-header>Product</s-table-header>
+              <s-table-header>Result</s-table-header>
+              <s-table-header>Time</s-table-header>
+            </s-table-header-row>
+            <s-table-body>
+              {shadowStats.recent.map((log, i) => (
+                <s-table-row key={i}>
+                  <s-table-cell>{log.action.replace("shadow_", "")}</s-table-cell>
+                  <s-table-cell>
+                    <s-text>{log.productId?.split("/").pop() ?? "—"}</s-text>
+                  </s-table-cell>
+                  <s-table-cell>
+                    {log.status === "success" ? (
+                      <s-badge tone="success">Match</s-badge>
+                    ) : (
+                      <s-badge tone="critical">Discrepancy</s-badge>
+                    )}
+                  </s-table-cell>
+                  <s-table-cell>
+                    <RelativeTime date={log.createdAt} />
+                  </s-table-cell>
+                </s-table-row>
+              ))}
+            </s-table-body>
+          </s-table>
+        </s-section>
+      )}
 
       {/* Listing Errors */}
       {errorCount > 0 && (
@@ -379,6 +543,31 @@ export default function EbaySettings() {
       {/* Sync Settings */}
       <s-section heading="Sync Settings">
         <s-stack direction="block" gap="base">
+          {connected && (
+            <s-stack
+              direction="inline"
+              gap="base"
+              alignItems="center"
+              justifyContent="space-between"
+            >
+              <s-stack direction="block" gap="small">
+                <s-text type="strong">Shadow mode</s-text>
+                <s-text color="subdued">
+                  Log what Card Yeti would do without writing to eBay.
+                  Use while validating alongside Marketplace Connector.
+                </s-text>
+              </s-stack>
+              <Form method="post">
+                <input type="hidden" name="intent" value="toggle-shadow" />
+                <s-button variant={shadowMode ? "primary" : "tertiary"} type="submit">
+                  {shadowMode ? "Disable Shadow Mode" : "Enable Shadow Mode"}
+                </s-button>
+              </Form>
+            </s-stack>
+          )}
+
+          {connected && <s-divider />}
+
           <s-stack
             direction="inline"
             gap="base"

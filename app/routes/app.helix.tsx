@@ -10,6 +10,7 @@ import db from "../db.server";
 import { fetchProductTypeCounts } from "../lib/graphql-queries.server";
 import { ConnectionCard } from "../components/ConnectionCard";
 import { StatCard } from "../components/StatCard";
+import { RelativeTime } from "../components/RelativeTime";
 
 interface LoaderData {
   connected: boolean;
@@ -17,6 +18,8 @@ interface LoaderData {
   totalProducts: number;
   gradedCount: number;
   rawCount: number;
+  lastExportDate: string | null;
+  lastPriceUpdateDate: string | null;
 }
 
 export const meta: MetaFunction = () => [{ title: "Helix | Card Yeti Sync" }];
@@ -48,18 +51,39 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }
   }
 
+  const lastExport = await db.syncLog.findFirst({
+    where: { shopId: shop, marketplace: "helix", action: "list" },
+    orderBy: { createdAt: "desc" },
+    select: { createdAt: true, details: true },
+  });
+
+  const lastPriceUpdate = await db.syncLog.findFirst({
+    where: { shopId: shop, action: "price_update" },
+    orderBy: { createdAt: "desc" },
+    select: { createdAt: true },
+  });
+
   return {
     connected: !!account,
     listingCount,
     totalProducts,
     gradedCount,
     rawCount,
+    lastExportDate: lastExport?.createdAt?.toISOString() ?? null,
+    lastPriceUpdateDate: lastPriceUpdate?.createdAt?.toISOString() ?? null,
   } satisfies LoaderData;
 };
 
 export default function HelixSettings() {
-  const { connected, listingCount, totalProducts, gradedCount, rawCount } =
-    useLoaderData<typeof loader>();
+  const {
+    connected,
+    listingCount,
+    totalProducts,
+    gradedCount,
+    rawCount,
+    lastExportDate,
+    lastPriceUpdateDate,
+  } = useLoaderData<typeof loader>();
 
   return (
     <s-page heading="Helix">
@@ -91,6 +115,74 @@ export default function HelixSettings() {
             <StatCard label="Active Listings" value={listingCount} />
           </s-stack>
         </ConnectionCard>
+      </s-section>
+
+      {/* CSV Export */}
+      <s-section heading="CSV Export">
+        <s-paragraph color="subdued">
+          Generate Helix-compatible CSVs for bulk upload. Includes rich
+          descriptions built from your card metafields.
+        </s-paragraph>
+
+        <s-box padding="base" borderWidth="base" borderRadius="base">
+          <s-stack direction="block" gap="base">
+            <s-grid gap="base">
+              <s-grid-item>
+                <StatCard
+                  label="Last Export"
+                  value={
+                    lastExportDate ? (
+                      <RelativeTime date={lastExportDate} />
+                    ) : (
+                      "Never"
+                    )
+                  }
+                />
+              </s-grid-item>
+              <s-grid-item>
+                <StatCard label="Format" value="Helix Seller CSV" />
+              </s-grid-item>
+            </s-grid>
+
+            <s-divider />
+
+            <s-stack direction="inline" gap="base" alignItems="center">
+              <a href="/api/export-helix?mode=all" download>
+                <s-button variant="primary">Export All Products</s-button>
+              </a>
+              <a href="/api/export-helix?mode=new" download>
+                <s-button>Export New Only</s-button>
+              </a>
+            </s-stack>
+          </s-stack>
+        </s-box>
+      </s-section>
+
+      {/* Price Management */}
+      <s-section heading="Price Management">
+        <s-paragraph color="subdued">
+          Download current prices as a CSV or upload updated prices in bulk.
+        </s-paragraph>
+
+        <s-box padding="base" borderWidth="base" borderRadius="base">
+          <s-stack direction="block" gap="base">
+            <s-stack direction="inline" gap="base" alignItems="center">
+              <a href="/api/prices" download>
+                <s-button variant="primary">Download Prices</s-button>
+              </a>
+            </s-stack>
+
+            {lastPriceUpdateDate && (
+              <s-stack direction="inline" gap="small" alignItems="center">
+                <s-text color="subdued">Last price update:</s-text>
+                <RelativeTime date={lastPriceUpdateDate} />
+              </s-stack>
+            )}
+            {!lastPriceUpdateDate && (
+              <s-text color="subdued">No price updates recorded yet.</s-text>
+            )}
+          </s-stack>
+        </s-box>
       </s-section>
 
       {/* Why Helix? */}
