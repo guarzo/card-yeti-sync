@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import type {
   HeadersFunction,
   LoaderFunctionArgs,
@@ -17,6 +17,10 @@ import { ConnectionCard } from "../components/ConnectionCard";
 import { StatCard } from "../components/StatCard";
 import { RelativeTime } from "../components/RelativeTime";
 import { DisconnectButton } from "../components/DisconnectButton";
+import { getAccountSettings } from "../lib/account-settings.server";
+import { getInventoryItem, getOffersForSku } from "../lib/adapters/ebay.server";
+import { getAllProducts } from "../lib/shopify-helpers.server";
+import { reconcileShop } from "../lib/sync-engine.server";
 
 interface ErrorListing {
   id: string;
@@ -52,6 +56,8 @@ interface LoaderData {
   productTitles: Record<string, string>;
   shadowMode: boolean;
   shadowStats: ShadowStats;
+  inventorySyncEnabled: boolean;
+  crossChannelDelistEnabled: boolean;
 }
 
 export const meta: MetaFunction = () => [{ title: "eBay | Card Yeti Sync" }];
@@ -139,8 +145,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const state = generateHmacState(shop, nonce);
   const authUrl = getAuthorizationUrl(state);
 
-  const accountSettings = (account?.settings ?? {}) as Record<string, unknown>;
-  const shadowMode = accountSettings.shadowMode === true;
+  const settings = account ? getAccountSettings(account) : null;
+  const shadowMode = settings?.shadowMode ?? false;
+  const inventorySyncEnabled = settings?.inventorySyncEnabled ?? true;
+  const crossChannelDelistEnabled = settings?.crossChannelDelistEnabled ?? true;
 
   let shadowStats: ShadowStats = { total: 0, matches: 0, discrepancies: 0, recent: [] };
   if (shadowMode) {
@@ -177,11 +185,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     productTitles,
     shadowMode,
     shadowStats,
+    inventorySyncEnabled,
+    crossChannelDelistEnabled,
   } satisfies LoaderData;
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const shop = session.shop;
   const formData = await request.formData();
   const intent = formData.get("intent");
@@ -197,15 +207,33 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         where: { shopId: shop, marketplace: "ebay" },
       }),
     ]);
-    return { disconnected: true };
+    return Response.json({ disconnected: true });
   }
 
-  if (intent === "create-policies") {
-    const account = await db.marketplaceAccount.findFirst({
-      where: { shopId: session.shop, marketplace: "ebay" },
-    });
-    if (!account) return Response.json({ error: "Not connected" }, { status: 400 });
+  if (intent === "reconcile") {
+    try {
+      const result = await reconcileShop(shop, admin);
+      return Response.json({
+        success: true,
+        message: `Reconciled: ${result.delisted} delisted, ${result.relisted} relisted, ${result.errors} errors`,
+        ...result,
+      });
+    } catch (err) {
+      console.error("Reconciliation failed:", err);
+      return Response.json(
+        { error: err instanceof Error ? err.message : "Reconciliation failed" },
+        { status: 500 },
+      );
+    }
+  }
 
+  // All remaining intents require a connected eBay account
+  const account = await db.marketplaceAccount.findFirst({
+    where: { shopId: shop, marketplace: "ebay" },
+  });
+  if (!account) return Response.json({ error: "Not connected" }, { status: 400 });
+
+  if (intent === "create-policies") {
     const { createFulfillmentPolicy, createPaymentPolicy, createReturnPolicy } =
       await import("../lib/ebay-policies.server");
 
@@ -230,11 +258,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "save-policies") {
-    const account = await db.marketplaceAccount.findFirst({
-      where: { shopId: session.shop, marketplace: "ebay" },
-    });
-    if (!account) return Response.json({ error: "Not connected" }, { status: 400 });
-
     const currentSettings = (account.settings ?? {}) as Record<string, unknown>;
     await db.marketplaceAccount.update({
       where: { id: account.id },
@@ -252,11 +275,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "toggle-shadow") {
-    const account = await db.marketplaceAccount.findFirst({
-      where: { shopId: session.shop, marketplace: "ebay" },
-    });
-    if (!account) return Response.json({ error: "Not connected" }, { status: 400 });
-
     const currentSettings = (account.settings ?? {}) as Record<string, unknown>;
     const newShadowMode = !(currentSettings.shadowMode === true);
     await db.marketplaceAccount.update({
@@ -269,7 +287,102 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return Response.json({ success: true, shadowMode: newShadowMode });
   }
 
-  return null;
+  if (intent === "toggle-inventory-sync") {
+    const currentSettings = (account.settings ?? {}) as Record<string, unknown>;
+    const newValue = !(currentSettings.inventorySyncEnabled !== false);
+    await db.marketplaceAccount.update({
+      where: { id: account.id },
+      data: { settings: { ...currentSettings, inventorySyncEnabled: newValue } },
+    });
+    return Response.json({ success: true });
+  }
+
+  if (intent === "toggle-cross-channel-delist") {
+    const currentSettings = (account.settings ?? {}) as Record<string, unknown>;
+    const newValue = !(currentSettings.crossChannelDelistEnabled !== false);
+    await db.marketplaceAccount.update({
+      where: { id: account.id },
+      data: { settings: { ...currentSettings, crossChannelDelistEnabled: newValue } },
+    });
+    return Response.json({ success: true });
+  }
+
+  if (intent === "import-listings") {
+
+    const products = await getAllProducts(admin, { query: "status:active" });
+    const results = { imported: 0, skipped: 0, notFound: [] as string[] };
+
+    const errors: string[] = [];
+    for (const p of products) {
+      if (!p.variant) continue;
+
+      const productId = p.product.id as string;
+      const sku = (p.variant.sku as string) || `CY-${productId.split("/").pop()}`;
+
+      try {
+        const existing = await db.marketplaceListing.findUnique({
+          where: {
+            shopId_shopifyProductId_marketplace: {
+              shopId: session.shop,
+              shopifyProductId: productId,
+              marketplace: "ebay",
+            },
+          },
+        });
+        if (existing) {
+          results.skipped++;
+          continue;
+        }
+
+        const item = await getInventoryItem(sku, account);
+        if (!item) {
+          results.notFound.push(`${p.product.title} (SKU: ${sku})`);
+          continue;
+        }
+
+        const offer = await getOffersForSku(sku, account);
+
+        await db.marketplaceListing.create({
+          data: {
+            shopId: session.shop,
+            shopifyProductId: productId,
+            marketplace: "ebay",
+            marketplaceId: offer?.listingId ?? "",
+            offerId: offer?.offerId ?? "",
+            status: "active",
+            lastSyncedAt: new Date(),
+          },
+        });
+        results.imported++;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        errors.push(`${p.product.title} (SKU: ${sku}): ${message}`);
+        console.error(`Import listing failed for SKU ${sku}:`, message);
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    await db.syncLog.create({
+      data: {
+        shopId: session.shop,
+        marketplace: "ebay",
+        action: "import",
+        status: errors.length > 0 ? "error" : "success",
+        details: JSON.stringify({ ...results, errors }),
+      },
+    });
+
+    const parts = [`Imported ${results.imported} listings`, `${results.skipped} already tracked`, `${results.notFound.length} not found on eBay`];
+    if (errors.length > 0) parts.push(`${errors.length} errors`);
+    return Response.json({
+      success: errors.length === 0,
+      message: parts.join(". ") + ".",
+      ...results,
+    });
+  }
+
+  return Response.json({ error: "Unknown intent" }, { status: 400 });
 };
 
 export default function EbaySettings() {
@@ -278,19 +391,23 @@ export default function EbaySettings() {
     listingCount,
     errorCount,
     pendingCount,
+    delistedCount,
     authUrl,
     tokenExpiry,
     recentErrors,
     productTitles,
     shadowMode,
     shadowStats,
+    inventorySyncEnabled,
+    crossChannelDelistEnabled,
   } = useLoaderData<typeof loader>();
   const [searchParams] = useSearchParams();
   const success = searchParams.get("success");
   const error = searchParams.get("error");
 
+  const [now] = useState(() => Date.now());
   const tokenExpired =
-    tokenExpiry != null && new Date(tokenExpiry).getTime() <= Date.now();
+    tokenExpiry != null && new Date(tokenExpiry).getTime() <= now;
   const tokenDays =
     tokenExpiry && !tokenExpired ? daysUntil(tokenExpiry) : null;
 
@@ -351,6 +468,9 @@ export default function EbaySettings() {
             </s-grid-item>
             <s-grid-item>
               <StatCard label="Pending" value={pendingCount} />
+            </s-grid-item>
+            <s-grid-item>
+              <StatCard label="Delisted" value={delistedCount} />
             </s-grid-item>
             <s-grid-item>
               <StatCard
@@ -568,54 +688,76 @@ export default function EbaySettings() {
 
           {connected && <s-divider />}
 
-          <s-stack
-            direction="inline"
-            gap="base"
-            alignItems="center"
-            justifyContent="space-between"
-          >
-            <s-stack direction="block" gap="small">
-              <s-text type="strong">Auto-sync new products</s-text>
-              <s-text color="subdued">
-                Automatically list new Shopify products on eBay when created.
-              </s-text>
+          {connected && (
+            <>
+              <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
+                <s-stack direction="block" gap="small">
+                  <s-text type="strong">Inventory sync</s-text>
+                  <s-text color="subdued">
+                    Delist from eBay when inventory reaches zero. Relist when inventory is restored.
+                  </s-text>
+                </s-stack>
+                <Form method="post">
+                  <input type="hidden" name="intent" value="toggle-inventory-sync" />
+                  <s-button variant={inventorySyncEnabled ? "primary" : "tertiary"} type="submit">
+                    {inventorySyncEnabled ? "Enabled" : "Disabled"}
+                  </s-button>
+                </Form>
+              </s-stack>
+
+              <s-divider />
+
+              <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
+                <s-stack direction="block" gap="small">
+                  <s-text type="strong">Cross-channel delisting</s-text>
+                  <s-text color="subdued">
+                    Remove from eBay when a card sells on another marketplace.
+                  </s-text>
+                </s-stack>
+                <Form method="post">
+                  <input type="hidden" name="intent" value="toggle-cross-channel-delist" />
+                  <s-button variant={crossChannelDelistEnabled ? "primary" : "tertiary"} type="submit">
+                    {crossChannelDelistEnabled ? "Enabled" : "Disabled"}
+                  </s-button>
+                </Form>
+              </s-stack>
+            </>
+          )}
+
+          {connected && <s-divider />}
+
+          {connected && (
+            <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
+              <s-stack direction="block" gap="small">
+                <s-text type="strong">Reconciliation</s-text>
+                <s-text color="subdued">
+                  Check all listings against current inventory and correct any drift.
+                </s-text>
+              </s-stack>
+              <Form method="post">
+                <input type="hidden" name="intent" value="reconcile" />
+                <s-button type="submit">Reconcile Now</s-button>
+              </Form>
             </s-stack>
-            <s-switch label="Auto-sync new products" disabled />
-          </s-stack>
+          )}
 
-          <s-divider />
+          {connected && <s-divider />}
 
-          <s-stack
-            direction="inline"
-            gap="base"
-            alignItems="center"
-            justifyContent="space-between"
-          >
-            <s-stack direction="block" gap="small">
-              <s-text type="strong">Inventory sync</s-text>
-              <s-text color="subdued">
-                Delist from eBay when inventory reaches zero.
-              </s-text>
+          {connected && (
+            <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
+              <s-stack direction="block" gap="small">
+                <s-text type="strong">Import existing listings</s-text>
+                <s-text color="subdued">
+                  Scan eBay for listings matching your Shopify product SKUs and import
+                  them into Card Yeti for tracking. Safe to run multiple times.
+                </s-text>
+              </s-stack>
+              <Form method="post">
+                <input type="hidden" name="intent" value="import-listings" />
+                <s-button type="submit">Import from eBay</s-button>
+              </Form>
             </s-stack>
-            <s-switch label="Inventory sync" disabled />
-          </s-stack>
-
-          <s-divider />
-
-          <s-stack
-            direction="inline"
-            gap="base"
-            alignItems="center"
-            justifyContent="space-between"
-          >
-            <s-stack direction="block" gap="small">
-              <s-text type="strong">Cross-channel delisting</s-text>
-              <s-text color="subdued">
-                Remove from eBay when a card sells on another marketplace.
-              </s-text>
-            </s-stack>
-            <s-switch label="Cross-channel delisting" disabled />
-          </s-stack>
+          )}
         </s-stack>
       </s-section>
     </s-page>

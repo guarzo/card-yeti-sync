@@ -211,10 +211,12 @@ updatePrice(marketplaceId, price)            → { status }
 - Helix pricing data integration
 
 ### Phase 5: Migration + Polish
-- Migrate Marketplace Connect listings to direct eBay integration
-- Sync rules UI (by collection, type, tags)
-- Price rules per marketplace
-- Disable Marketplace Connect
+- Shadow mode for parallel validation alongside Marketplace Connector
+- Bulk import of existing eBay listings by SKU
+- Sync rules UI (product types, tags, price range, auto-sync)
+- Configurable discount % per marketplace
+- Inventory sync + cross-channel delist toggles
+- Manual reconciliation trigger
 
 ## Non-Goals (for now)
 

@@ -31,8 +31,9 @@ Card Yeti Sync is an embedded Shopify app that syncs your Pokémon card inventor
 - **Shadow mode** — Run alongside Shopify Marketplace Connector to validate sync behavior before cutting over
 - **Sync rules** — Filter which products sync per marketplace by type, tags, price range
 - **CSV exports** — Generate Whatnot and Helix-compatible CSVs with rich descriptions built from card metafields
-- **Price management** — Download/upload price CSVs with automatic 5% Shopify discount calculation
-- **Reconciliation cron** — Periodic inventory drift correction via QStash
+- **Price management** — Download/upload price CSVs with configurable per-marketplace Shopify discount
+- **Bulk eBay import** — Import existing Marketplace Connector listings by SKU for seamless migration
+- **Reconciliation** — Manual trigger or periodic cron for inventory drift correction
 
 ## Supported Marketplaces
 
@@ -70,6 +71,7 @@ Generates Helix-compatible CSVs with full card metadata (29 columns). Integratio
 ### Prerequisites
 
 - [Node.js](https://nodejs.org/) >= 20.19
+- [Docker](https://docs.docker.com/get-docker/) (for local PostgreSQL)
 - [Shopify CLI](https://shopify.dev/docs/apps/tools/cli)
 - A Shopify Partner account and dev store
 
@@ -79,7 +81,21 @@ Generates Helix-compatible CSVs with full card metadata (29 columns). Integratio
 # Install dependencies
 npm install
 
-# Set up the database
+# Copy environment template
+cp .env.example .env
+# Then fill in your eBay sandbox credentials in .env
+
+# Start local Postgres, run migrations, and launch Shopify dev server
+npm run dev:full
+```
+
+Or step by step:
+
+```bash
+# Start PostgreSQL
+docker compose up -d
+
+# Run database migrations
 npx prisma migrate dev
 
 # Start the dev server (opens in Shopify admin)
@@ -87,6 +103,8 @@ shopify app dev
 ```
 
 Press `p` in the terminal to open the app URL in your browser.
+
+> **Note:** The Fly.io database is production-only. Local development uses a Docker Compose PostgreSQL instance on port 15432.
 
 ## Project Structure
 
@@ -106,16 +124,16 @@ app/
       BulkApproveModal.tsx           #     Bulk price suggestion review
   routes/
     app._index.tsx                   # Dashboard — 5-zone priority layout
-    app.ebay.tsx                     # eBay — connect, policies, shadow mode, sync settings
+    app.ebay.tsx                     # eBay — connect, policies, shadow mode, sync toggles, reconcile, import
     app.whatnot.tsx                  # Whatnot — CSV export, price management, inventory breakdown
     app.helix.tsx                    # Helix — CSV export, price management, roadmap
-    app.sync-rules.tsx               # Sync rules — per-marketplace product filters
+    app.sync-rules.tsx               # Sync rules — per-marketplace product filters + discount %
     app.privacy.tsx                  # Privacy policy page
     api.ebay-callback.tsx            # eBay OAuth callback
     api.ebay-notifications.tsx       # eBay marketplace account deletion (GDPR)
     api.export-whatnot.tsx           # Whatnot CSV download
     api.export-helix.tsx             # Helix CSV download
-    api.prices.tsx                   # Price CSV download + upload with 5% discount
+    api.prices.tsx                   # Price CSV download + upload with configurable discount
     api.product-sync-status.tsx      # Product sync status for admin block extension
     api.reconcile.tsx                # QStash cron for inventory drift reconciliation
     webhooks.products.create.tsx     # Auto-list new products on eBay (respects sync rules)
@@ -125,14 +143,16 @@ app/
     webhooks.app.uninstalled.tsx     # Cleanup all data on uninstall
   lib/
     adapters/
-      ebay.server.ts                 # eBay Inventory API adapter (list, update, delist, bulk)
+      ebay.server.ts                 # eBay Inventory API adapter (list, update, delist, bulk, import)
     mappers/
       ebay-mapper.ts                 # Shopify product → eBay inventory item + offer
       whatnot-mapper.ts              # Shopify product → Whatnot CSV row
       helix-mapper.ts                # Shopify product → Helix CSV row
     csv-utils.ts                     # Shared CSV escape + generation
-    sync-engine.server.ts            # Cross-channel delist/relist orchestration
+    sync-engine.server.ts            # Cross-channel delist/relist orchestration + reconciliation
+    sync-rules.ts                    # SyncRules type, defaults, product type constants
     sync-rules.server.ts             # Sync rules evaluation (type, tags, price)
+    account-settings.server.ts       # Typed account settings with defaults
     shadow-mode.server.ts            # Shadow mode check + eBay state comparison
     shopify-helpers.server.ts        # Product fetcher + metafield extraction
     ebay-client.server.ts            # eBay OAuth + API client
@@ -167,6 +187,9 @@ MarketplaceAccount ──┐
   settings (JSON)     │           status (active|delisted|error|pending)
     syncRules         │           lastSyncedAt
     shadowMode        │           errorMessage
+    inventorySyncEnabled │
+    crossChannelDelistEnabled │
+    discountPercent   │
     policyIds         │
                       │
 SyncLog               │
@@ -224,8 +247,9 @@ fly deploy
 # Deploy Shopify app config + extensions
 shopify app deploy
 
-# Local db proxy
-fly proxy 15432:5432 -a card-yeti-sync-db
+# Proxy prod DB for debugging (read-only recommended)
+fly proxy 25432:5432 -a card-yeti-sync-db
+# Then: DATABASE_URL="postgresql://...@localhost:25432/..." npx prisma studio
 ```
 
 ### Environment Variables
@@ -265,7 +289,7 @@ Set automatically by Shopify CLI during development. For production, configure v
 | `npm run lint` | ESLint |
 | `npm run setup` | Generate Prisma client + run migrations |
 | `npm run test` | Run Vitest tests |
-| `npm run dev:full` | Start Fly DB proxy + Shopify dev server |
+| `npm run dev:full` | Start local Postgres + migrations + Shopify dev server |
 
 ---
 

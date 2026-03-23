@@ -2,6 +2,7 @@ import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { delistFromAllExcept, relistAll } from "../lib/sync-engine.server";
+import { getAccountSettings } from "../lib/account-settings.server";
 
 const INVENTORY_ITEM_QUERY = `
   query inventoryItemToProduct($id: ID!) {
@@ -47,6 +48,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (!productGid) {
     console.log(`  Inventory item ${inventoryItemId} has no associated product — skipping`);
+    return new Response();
+  }
+
+  // Check if any connected marketplace account has inventory sync enabled
+  const accounts = await db.marketplaceAccount.findMany({
+    where: { shopId: shop },
+  });
+  const anyInventorySyncEnabled = accounts.some(
+    (a) => getAccountSettings(a).inventorySyncEnabled,
+  );
+  if (accounts.length > 0 && !anyInventorySyncEnabled) {
+    console.log("Inventory sync disabled on all accounts — skipping");
     return new Response();
   }
 

@@ -1,9 +1,8 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
-import { escapeCSVField } from "../lib/csv-utils";
+import { escapeCSVField, parseCSV } from "../lib/csv-utils";
 import db from "../db.server";
-
-const SHOPIFY_DISCOUNT = 0.05;
+import { getAccountSettings } from "../lib/account-settings.server";
 
 const PRODUCTS_QUERY = `
   query products($first: Int!, $after: String) {
@@ -42,31 +41,6 @@ const VARIANT_UPDATE_MUTATION = `
   }
 `;
 
-function parseCSV(text: string): string[][] {
-  const rows: string[][] = [];
-  let field = "";
-  let inQuotes = false;
-  let row: string[] = [];
-
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    const next = text[i + 1];
-
-    if (inQuotes) {
-      if (ch === '"' && next === '"') { field += '"'; i++; }
-      else if (ch === '"') { inQuotes = false; }
-      else { field += ch; }
-    } else if (ch === '"') { inQuotes = true; }
-    else if (ch === ",") { row.push(field); field = ""; }
-    else if (ch === "\n" || (ch === "\r" && next === "\n")) {
-      row.push(field); field = ""; rows.push(row); row = [];
-      if (ch === "\r") i++;
-    } else { field += ch; }
-  }
-
-  if (field || row.length > 0) { row.push(field); rows.push(row); }
-  return rows;
-}
 
 interface ProductNode {
   id: string;
@@ -161,6 +135,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
 
+  const account = await db.marketplaceAccount.findFirst({
+    where: { shopId: session.shop },
+  });
+  const discountPercent = account ? getAccountSettings(account).discountPercent : 5;
+  const shopifyDiscount = discountPercent / 100;
+
   const formData = await request.formData();
   const file = formData.get("file") as File | null;
   const dryRun = formData.get("dryRun") === "true";
@@ -222,7 +202,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     if (!current) continue;
 
     const newCompareAt = csvPrice;
-    const newPrice = (parseFloat(csvPrice) * (1 - SHOPIFY_DISCOUNT)).toFixed(2);
+    const newPrice = (parseFloat(csvPrice) * (1 - shopifyDiscount)).toFixed(2);
 
     if (newPrice !== current.price || newCompareAt !== current.compareAtPrice) {
       updates.push({ productId, variantId, title: title ?? productId, oldPrice: current.price, newPrice, newCompareAt });

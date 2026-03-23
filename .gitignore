@@ -15,6 +15,10 @@ database.sqlite
 
 .env
 .env.*
+!.env.example
+
+# Docker overrides
+docker-compose.override.yml
 
 yarn.lock
 pnpm-lock.yaml

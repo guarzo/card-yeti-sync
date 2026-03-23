@@ -34,6 +34,8 @@ export interface PriceSuggestion {
   suggestedPrice: string;
   reason: string | null;
   productTitle?: string;
+  source?: string;
+  certNumber?: string;
 }
 
 export interface ListingStatus {

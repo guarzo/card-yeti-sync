@@ -6,6 +6,7 @@ import db from "../db.server";
 import { MARKETPLACE_CONFIG, type MarketplaceKey } from "../lib/marketplace-config";
 import { type SyncRules, DEFAULT_SYNC_RULES, PRODUCT_TYPES } from "../lib/sync-rules";
 import { getSyncRules } from "../lib/sync-rules.server";
+import { getAccountSettings } from "../lib/account-settings.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -16,11 +17,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   });
 
   const rulesByMarketplace: Record<string, SyncRules> = {};
+  const discountByMarketplace: Record<string, number> = {};
   for (const account of accounts) {
     rulesByMarketplace[account.marketplace] = getSyncRules(account);
+    const settings = getAccountSettings(account);
+    discountByMarketplace[account.marketplace] = settings.discountPercent;
   }
 
-  return { rulesByMarketplace, connectedMarketplaces: accounts.map((a) => a.marketplace) };
+  return { rulesByMarketplace, discountByMarketplace, connectedMarketplaces: accounts.map((a) => a.marketplace) };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -69,10 +73,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     autoSyncNew,
   };
 
+  const discountRaw = formData.get("discountPercent")?.toString()?.trim();
+  const discountPercent = discountRaw ? Number(discountRaw) : 5;
+
+  if (!Number.isFinite(discountPercent) || discountPercent < 0 || discountPercent > 100) {
+    return Response.json({ error: "Discount must be between 0 and 100", marketplace }, { status: 400 });
+  }
+
   const currentSettings = (account.settings ?? {}) as Record<string, unknown>;
   const newSettings: Prisma.InputJsonValue = {
     ...currentSettings,
     syncRules: syncRules as unknown as Prisma.InputJsonValue,
+    discountPercent,
   };
   await db.marketplaceAccount.update({
     where: { id: account.id },
@@ -85,7 +97,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function SyncRulesPage() {
-  const { rulesByMarketplace, connectedMarketplaces } = useLoaderData<typeof loader>();
+  const { rulesByMarketplace, discountByMarketplace, connectedMarketplaces } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
 
   if (connectedMarketplaces.length === 0) {
@@ -183,6 +195,25 @@ export default function SyncRulesPage() {
                     />
                     <s-text>Auto-sync new products</s-text>
                   </label>
+
+                  <s-divider />
+
+                  <label htmlFor={`discountPercent-${mp}`}>
+                    <s-text type="strong">Shopify Discount %</s-text>
+                  </label>
+                  <s-text color="subdued">
+                    Shopify storefront price will be this much lower than the marketplace listing price.
+                  </s-text>
+                  <input
+                    id={`discountPercent-${mp}`}
+                    type="number"
+                    name="discountPercent"
+                    defaultValue={discountByMarketplace[mp] ?? 5}
+                    min="0"
+                    max="100"
+                    step="0.5"
+                    style={{ width: "100px", padding: "0.5rem" }}
+                  />
 
                   {actionData && "error" in actionData && (actionData as { marketplace: string }).marketplace === mp && (
                     <s-banner tone="critical">

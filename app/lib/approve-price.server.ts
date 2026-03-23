@@ -1,4 +1,5 @@
 import db from "../db.server";
+import type { AdminClient } from "../types/admin";
 
 export interface ApproveResult {
   id: string;
@@ -20,13 +21,6 @@ const BULK_UPDATE_PRICE = `#graphql
       userErrors { field message }
     }
   }`;
-
-interface AdminClient {
-  graphql: (
-    query: string,
-    options?: { variables?: Record<string, unknown> },
-  ) => Promise<Response>;
-}
 
 export async function approvePriceSuggestion(
   admin: AdminClient,

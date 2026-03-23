@@ -143,7 +143,8 @@ export async function refreshAccessToken(refreshToken: string): Promise<{
  * Make an authenticated API call to any eBay Sell API.
  * Handles reactive refresh: on 401, refreshes the token and retries once.
  *
- * Returns the updated account (with new tokens if refreshed) and the response.
+ * Returns the raw HTTP response and, if a token refresh occurred, the new
+ * access token and expiry. The caller is responsible for persisting updated tokens.
  */
 export async function ebayApiCall(
   method: string,
@@ -188,4 +189,97 @@ export type TokenUpdate = {
   accessToken: string;
   tokenExpiry: Date;
 };
+
+// ── Browse API (client_credentials grant) ────────────────────────────────────
+
+let cachedAppToken: string | null = null;
+let appTokenExpiry = 0;
+let tokenRefreshPromise: Promise<string> | null = null;
+
+async function getClientCredentialsToken(): Promise<string> {
+  if (cachedAppToken && Date.now() < appTokenExpiry) return cachedAppToken;
+
+  // Coalesce concurrent refresh calls to avoid thundering herd
+  if (!tokenRefreshPromise) {
+    tokenRefreshPromise = (async () => {
+      const endpoints = getEndpoints();
+      const res = await fetch(endpoints.token, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Authorization: `Basic ${getBasicAuth()}`,
+        },
+        body: "grant_type=client_credentials&scope=https://api.ebay.com/oauth/api_scope",
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`eBay OAuth (client_credentials) error: ${res.status} ${text}`);
+      }
+
+      const data = await res.json();
+      cachedAppToken = data.access_token;
+      // Expire 60s early to be safe
+      appTokenExpiry = Date.now() + (data.expires_in - 60) * 1000;
+      return cachedAppToken!;
+    })().finally(() => {
+      tokenRefreshPromise = null;
+    });
+  }
+
+  return tokenRefreshPromise;
+}
+
+export interface EbayBrowseItem {
+  itemId: string;
+  legacyItemId?: string;
+  title: string;
+  price?: { value: string; currency: string };
+  localizedAspects?: Array<{ name: string; value: string }>;
+  image?: { imageUrl: string };
+  additionalImages?: Array<{ imageUrl: string }>;
+  description?: string;
+}
+
+/**
+ * Fetch a single eBay item by its item ID using the Browse API.
+ * Uses client_credentials grant (no user auth needed).
+ */
+export async function getEbayBrowseItem(
+  itemId: string,
+  marketplaceId = "EBAY_US",
+): Promise<EbayBrowseItem> {
+  let token = await getClientCredentialsToken();
+  const endpoints = getEndpoints();
+
+  // Normalize to full item ID format
+  const fullId = itemId.includes("|") ? itemId : `v1|${itemId}|0`;
+
+  const url = `${endpoints.api}/buy/browse/v1/item/${encodeURIComponent(fullId)}`;
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    "X-EBAY-C-MARKETPLACE-ID": marketplaceId,
+  };
+  let res = await fetch(url, { headers });
+
+  // If 401, invalidate cached token and retry once
+  if (res.status === 401) {
+    cachedAppToken = null;
+    appTokenExpiry = 0;
+    token = await getClientCredentialsToken();
+    headers.Authorization = `Bearer ${token}`;
+    res = await fetch(url, { headers });
+  }
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`eBay Browse API error (${itemId}): ${res.status} ${text}`);
+  }
+
+  const data = await res.json();
+  if (!data.itemId || typeof data.title !== "string") {
+    throw new Error(`eBay Browse API returned unexpected shape for ${itemId}`);
+  }
+  return data as EbayBrowseItem;
+}
 

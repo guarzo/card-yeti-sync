@@ -1,9 +1,11 @@
+import { useState } from "react";
 import type {
+  ActionFunctionArgs,
   HeadersFunction,
   LoaderFunctionArgs,
   MetaFunction,
 } from "react-router";
-import { useLoaderData, useRouteError } from "react-router";
+import { useFetcher, useLoaderData, useRouteError } from "react-router";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import db from "../db.server";
@@ -11,6 +13,11 @@ import { fetchProductTypeCounts } from "../lib/graphql-queries.server";
 import { ConnectionCard } from "../components/ConnectionCard";
 import { StatCard } from "../components/StatCard";
 import { RelativeTime } from "../components/RelativeTime";
+import { BulkApproveModal } from "../components/dashboard/BulkApproveModal";
+import { isPricingApiConfigured } from "../lib/pricing-api.server";
+import { fetchAndCreatePriceSuggestions } from "../lib/fetch-price-suggestions.server";
+import { approvePriceSuggestion } from "../lib/approve-price.server";
+import type { PriceSuggestion } from "../types/dashboard";
 
 interface LoaderData {
   connected: boolean;
@@ -20,6 +27,10 @@ interface LoaderData {
   rawCount: number;
   lastExportDate: string | null;
   lastPriceUpdateDate: string | null;
+  pricingApiConfigured: boolean;
+  pendingSuggestions: PriceSuggestion[];
+  pendingCount: number;
+  lastFetchDate: string | null;
 }
 
 export const meta: MetaFunction = () => [{ title: "Helix | Card Yeti Sync" }];
@@ -63,6 +74,54 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     select: { createdAt: true },
   });
 
+  // Smart Pricing data
+  const pendingSuggestionsRaw = await db.priceSuggestion.findMany({
+    where: { shopId: shop, status: "pending", source: "api" },
+    orderBy: { createdAt: "desc" },
+  });
+
+  // Batch-fetch product titles for all suggestions in a single GraphQL call
+  const productIds = [
+    ...new Set(pendingSuggestionsRaw.map((s) => s.shopifyProductId)),
+  ];
+  const titleMap = new Map<string, string>();
+  if (productIds.length > 0) {
+    try {
+      const response = await admin.graphql(
+        `query ($ids: [ID!]!) { nodes(ids: $ids) { ... on Product { id title } } }`,
+        { variables: { ids: productIds } },
+      );
+      const data = await response.json();
+      for (const node of data.data?.nodes ?? []) {
+        if (node?.id && node?.title) {
+          titleMap.set(node.id, node.title);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to fetch product titles for price suggestions:", err);
+      // Fall back to using product IDs as titles
+    }
+  }
+
+  const pendingSuggestions: PriceSuggestion[] = pendingSuggestionsRaw.map(
+    (s) => ({
+      id: s.id,
+      shopifyProductId: s.shopifyProductId,
+      currentPrice: s.currentPrice.toString(),
+      suggestedPrice: s.suggestedPrice.toString(),
+      reason: s.reason,
+      productTitle: titleMap.get(s.shopifyProductId) ?? s.shopifyProductId,
+      source: s.source,
+      certNumber: s.certNumber ?? undefined,
+    }),
+  );
+
+  const lastFetch = await db.syncLog.findFirst({
+    where: { shopId: shop, marketplace: "helix", action: "price_fetch" },
+    orderBy: { createdAt: "desc" },
+    select: { createdAt: true },
+  });
+
   return {
     connected: !!account,
     listingCount,
@@ -71,7 +130,91 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     rawCount,
     lastExportDate: lastExport?.createdAt?.toISOString() ?? null,
     lastPriceUpdateDate: lastPriceUpdate?.createdAt?.toISOString() ?? null,
+    pricingApiConfigured: isPricingApiConfigured(),
+    pendingSuggestions,
+    pendingCount: pendingSuggestions.length,
+    lastFetchDate: lastFetch?.createdAt?.toISOString() ?? null,
   } satisfies LoaderData;
+};
+
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const { admin, session } = await authenticate.admin(request);
+  const shop = session.shop;
+  const formData = await request.formData();
+  const intent = formData.get("intent");
+
+  if (intent === "fetch-prices") {
+    try {
+      const result = await fetchAndCreatePriceSuggestions(admin, shop);
+      return {
+        fetchResult: result,
+      };
+    } catch (err) {
+      return {
+        error: err instanceof Error ? err.message : "Failed to fetch prices",
+      };
+    }
+  }
+
+  if (intent === "approve-price") {
+    const suggestionId = formData.get("suggestionId") as string;
+    if (!suggestionId) return { error: "Missing suggestion ID" };
+    try {
+      const result = await approvePriceSuggestion(admin, shop, suggestionId);
+      if (!result.success) return { error: result.error };
+      return { approved: 1 };
+    } catch (err) {
+      return { success: false, error: String(err) };
+    }
+  }
+
+  if (intent === "bulk-approve-prices") {
+    const suggestionIds = formData.getAll("suggestionIds") as string[];
+    if (suggestionIds.length === 0) return { error: "No suggestions selected" };
+
+    const BATCH_SIZE = 5;
+    const results: Array<{ id: string; success: boolean; error?: string }> = [];
+    for (let i = 0; i < suggestionIds.length; i += BATCH_SIZE) {
+      const batch = suggestionIds.slice(i, i + BATCH_SIZE);
+      try {
+        const batchResults = await Promise.all(
+          batch.map((id) => approvePriceSuggestion(admin, shop, id)),
+        );
+        results.push(...batchResults);
+      } catch (err) {
+        results.push(
+          ...batch.map((id) => ({
+            id,
+            success: false,
+            error: String(err),
+          })),
+        );
+      }
+    }
+
+    const failures = results.filter((r) => !r.success);
+    if (failures.length > 0) {
+      return {
+        partialSuccess: true,
+        approved: results.filter((r) => r.success).length,
+        failed: failures.length,
+      };
+    }
+    return { approved: results.length };
+  }
+
+  if (intent === "reject-price") {
+    const suggestionId = formData.get("suggestionId") as string;
+    if (!suggestionId) return { error: "Missing suggestion ID" };
+    const { count } = await db.priceSuggestion.updateMany({
+      where: { id: suggestionId, shopId: shop, status: "pending" },
+      data: { status: "rejected", reviewedAt: new Date() },
+    });
+    if (count === 0) return { error: "Suggestion not found or already reviewed" };
+    return { rejected: 1 };
+  }
+
+  return null;
 };
 
 export default function HelixSettings() {
@@ -83,7 +226,22 @@ export default function HelixSettings() {
     rawCount,
     lastExportDate,
     lastPriceUpdateDate,
+    pricingApiConfigured,
+    pendingSuggestions,
+    pendingCount,
+    lastFetchDate,
   } = useLoaderData<typeof loader>();
+
+  const fetchPricesFetcher = useFetcher();
+  const isFetching = fetchPricesFetcher.state === "submitting";
+  const [bulkModalOpen, setBulkModalOpen] = useState(false);
+
+  const fetchResult = (fetchPricesFetcher.data as Record<string, unknown>)?.fetchResult as
+    | { created: number; updated: number; notFound: number; total: number }
+    | undefined;
+  const fetchError = (fetchPricesFetcher.data as Record<string, unknown>)?.error as
+    | string
+    | undefined;
 
   return (
     <s-page heading="Helix">
@@ -184,6 +342,112 @@ export default function HelixSettings() {
           </s-stack>
         </s-box>
       </s-section>
+
+      {/* Smart Pricing */}
+      <s-section heading="Smart Pricing">
+        <s-paragraph color="subdued">
+          Fetch suggested prices for your graded inventory based on recent
+          market data. Only products with certification numbers are eligible.
+        </s-paragraph>
+
+        <s-box padding="base" borderWidth="base" borderRadius="base">
+          <s-stack direction="block" gap="base">
+            {!pricingApiConfigured && (
+              <s-banner tone="info">
+                Set the <s-text type="strong">PRICING_API_URL</s-text> and{" "}
+                <s-text type="strong">PRICING_API_KEY</s-text> environment
+                variables to enable smart pricing.
+              </s-banner>
+            )}
+
+            {pricingApiConfigured && (
+              <>
+                <s-stack direction="inline" gap="base" alignItems="center">
+                  <fetchPricesFetcher.Form method="post">
+                    <input type="hidden" name="intent" value="fetch-prices" />
+                    <s-button
+                      variant="primary"
+                      type="submit"
+                      disabled={isFetching || undefined}
+                    >
+                      {isFetching
+                        ? "Fetching..."
+                        : "Fetch Price Suggestions"}
+                    </s-button>
+                  </fetchPricesFetcher.Form>
+
+                  {lastFetchDate && (
+                    <s-stack direction="inline" gap="small" alignItems="center">
+                      <s-text color="subdued">Last fetch:</s-text>
+                      <RelativeTime date={lastFetchDate} />
+                    </s-stack>
+                  )}
+                </s-stack>
+
+                {fetchResult && (
+                  <s-banner tone="success">
+                    Found pricing for {fetchResult.created + fetchResult.updated}{" "}
+                    of {fetchResult.total} graded products.
+                    {fetchResult.notFound > 0 &&
+                      ` ${fetchResult.notFound} had no pricing data.`}
+                  </s-banner>
+                )}
+
+                {fetchError && (
+                  <s-banner tone="critical">{fetchError}</s-banner>
+                )}
+              </>
+            )}
+          </s-stack>
+        </s-box>
+
+        {/* Pending Suggestions Table */}
+        {pendingCount > 0 && (
+          <s-box
+            padding="base"
+            borderWidth="base"
+            borderRadius="base"
+          >
+            <s-stack direction="block" gap="base">
+              <s-stack direction="inline" gap="base" alignItems="center">
+                <s-text type="strong">
+                  {pendingCount} pending suggestion
+                  {pendingCount !== 1 ? "s" : ""}
+                </s-text>
+                <s-button
+                  variant="primary"
+                  onClick={() => setBulkModalOpen(true)}
+                >
+                  Review All
+                </s-button>
+              </s-stack>
+
+              <s-divider />
+
+              {pendingSuggestions.map((suggestion) => (
+                <SuggestionRow
+                  key={suggestion.id}
+                  suggestion={suggestion}
+                />
+              ))}
+            </s-stack>
+          </s-box>
+        )}
+
+        {pricingApiConfigured && pendingCount === 0 && !fetchResult && (
+          <s-text color="subdued">
+            No pending price suggestions. Use the button above to fetch
+            suggestions for your graded inventory.
+          </s-text>
+        )}
+      </s-section>
+
+      {/* Bulk Approve Modal */}
+      <BulkApproveModal
+        suggestions={pendingSuggestions}
+        open={bulkModalOpen}
+        onClose={() => setBulkModalOpen(false)}
+      />
 
       {/* Why Helix? */}
       <s-section heading="Why Helix?">
@@ -308,6 +572,74 @@ export default function HelixSettings() {
         </s-grid>
       </s-section>
     </s-page>
+  );
+}
+
+function SuggestionRow({ suggestion }: { suggestion: PriceSuggestion }) {
+  const approveFetcher = useFetcher();
+  const rejectFetcher = useFetcher();
+  const isApproving = approveFetcher.state === "submitting";
+  const isRejecting = rejectFetcher.state === "submitting";
+  const isDone =
+    (approveFetcher.data as Record<string, unknown>)?.approved ||
+    (rejectFetcher.data as Record<string, unknown>)?.rejected;
+
+  const approveError = (approveFetcher.data as Record<string, unknown>)?.error as
+    | string
+    | undefined;
+  const rejectError = (rejectFetcher.data as Record<string, unknown>)?.error as
+    | string
+    | undefined;
+  const inlineError = approveError || rejectError;
+
+  if (isDone) return null;
+
+  return (
+    <s-stack direction="inline" gap="base" alignItems="center">
+      <s-stack direction="block" gap="small">
+        <s-text type="strong">
+          {suggestion.productTitle ?? suggestion.shopifyProductId}
+        </s-text>
+        <s-text color="subdued">
+          ${suggestion.currentPrice} → ${suggestion.suggestedPrice}
+          {suggestion.certNumber && ` · Cert: ${suggestion.certNumber}`}
+        </s-text>
+        {inlineError && (
+          <s-text tone="critical">{inlineError}</s-text>
+        )}
+      </s-stack>
+      <s-stack direction="inline" gap="small">
+        <approveFetcher.Form method="post">
+          <input type="hidden" name="intent" value="approve-price" />
+          <input
+            type="hidden"
+            name="suggestionId"
+            value={suggestion.id}
+          />
+          <s-button
+            variant="primary"
+            type="submit"
+            disabled={isApproving || isRejecting || undefined}
+          >
+            {isApproving ? "..." : "Approve"}
+          </s-button>
+        </approveFetcher.Form>
+        <rejectFetcher.Form method="post">
+          <input type="hidden" name="intent" value="reject-price" />
+          <input
+            type="hidden"
+            name="suggestionId"
+            value={suggestion.id}
+          />
+          <s-button
+            type="submit"
+            disabled={isApproving || isRejecting || undefined}
+          >
+            {isRejecting ? "..." : "Reject"}
+          </s-button>
+        </rejectFetcher.Form>
+      </s-stack>
+    </s-stack>
   );
 }
 

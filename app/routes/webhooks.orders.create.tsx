@@ -1,11 +1,25 @@
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import { delistFromAllExcept } from "../lib/sync-engine.server";
+import db from "../db.server";
+import { getAccountSettings } from "../lib/account-settings.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { shop, topic, payload } = await authenticate.webhook(request);
 
   console.log(`Received ${topic} webhook for ${shop}`);
+
+  // Check if any connected marketplace account has cross-channel delisting enabled
+  const accounts = await db.marketplaceAccount.findMany({
+    where: { shopId: shop },
+  });
+  const anyCrossChannelEnabled = accounts.some(
+    (a) => getAccountSettings(a).crossChannelDelistEnabled,
+  );
+  if (accounts.length > 0 && !anyCrossChannelEnabled) {
+    console.log("Cross-channel delisting disabled on all accounts — skipping");
+    return new Response();
+  }
 
   const lineItems = payload.line_items ?? [];
 

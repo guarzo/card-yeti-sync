@@ -8,9 +8,39 @@ import {
 } from "../mappers/ebay-mapper";
 import { isShadowMode, compareWithEbayState, logShadowAction } from "../shadow-mode.server";
 import type { CardMetafields } from "../shopify-helpers.server";
+import { sleep } from "../timing";
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * Wrapper around ebayApiCall that persists refreshed tokens to the database.
+ * Returns just the Response for cleaner call-site destructuring.
+ */
+async function ebayApiCallWithPersist(
+  method: string,
+  path: string,
+  body: Record<string, unknown> | null,
+  account: MarketplaceAccount,
+): Promise<Response> {
+  const { response, updatedTokens } = await ebayApiCall(method, path, body, account);
+  if (updatedTokens) {
+    // Update in-memory so subsequent calls in the same request use the fresh token
+    account.accessToken = updatedTokens.accessToken;
+    account.tokenExpiry = updatedTokens.tokenExpiry;
+    try {
+      await db.marketplaceAccount.update({
+        where: { id: account.id },
+        data: {
+          accessToken: updatedTokens.accessToken,
+          tokenExpiry: updatedTokens.tokenExpiry,
+        },
+      });
+    } catch (err) {
+      console.error(
+        `Failed to persist refreshed eBay token for account ${account.id}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+  return response;
 }
 
 interface ListResult {
@@ -56,7 +86,7 @@ export async function listProduct(
   }
 
   // Step 1: Create or replace inventory item
-  const { response: itemResponse } = await ebayApiCall(
+  const itemResponse = await ebayApiCallWithPersist(
     "PUT",
     `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
     inventoryItem as unknown as Record<string, unknown>,
@@ -68,10 +98,10 @@ export async function listProduct(
     return { marketplaceId: "", offerId: "", url: "", status: "error", error: err };
   }
 
-  await delay(200);
+  await sleep(200);
 
   // Step 2: Create offer
-  const { response: offerResponse } = await ebayApiCall(
+  const offerResponse = await ebayApiCallWithPersist(
     "POST",
     "/sell/inventory/v1/offer",
     offer as unknown as Record<string, unknown>,
@@ -86,10 +116,10 @@ export async function listProduct(
   const offerData = await offerResponse.json();
   const offerId = offerData.offerId;
 
-  await delay(200);
+  await sleep(200);
 
   // Step 3: Publish offer
-  const { response: publishResponse } = await ebayApiCall(
+  const publishResponse = await ebayApiCallWithPersist(
     "POST",
     `/sell/inventory/v1/offer/${offerId}/publish`,
     null,
@@ -131,7 +161,7 @@ export async function updateProduct(
 
   const inventoryItem = mapToInventoryItem(product, metafields, images);
 
-  const { response: itemResponse } = await ebayApiCall(
+  const itemResponse = await ebayApiCallWithPersist(
     "PUT",
     `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
     inventoryItem as unknown as Record<string, unknown>,
@@ -150,7 +180,7 @@ export async function updateProduct(
     returnPolicyId: settings.returnPolicyId ?? "",
   });
 
-  const { response: offerResponse } = await ebayApiCall(
+  const offerResponse = await ebayApiCallWithPersist(
     "PUT",
     `/sell/inventory/v1/offer/${offerId}`,
     offer as unknown as Record<string, unknown>,
@@ -181,7 +211,7 @@ export async function delistProduct(
     return { status: "delisted" };
   }
 
-  const { response } = await ebayApiCall(
+  const response = await ebayApiCallWithPersist(
     "POST",
     `/sell/inventory/v1/offer/${offerId}/withdraw`,
     null,
@@ -230,7 +260,7 @@ export async function bulkUpdatePriceQuantity(
     }),
   }));
 
-  const { response } = await ebayApiCall(
+  const response = await ebayApiCallWithPersist(
     "POST",
     "/sell/inventory/v1/bulk_update_price_quantity",
     { requests },
@@ -249,5 +279,62 @@ export async function bulkUpdatePriceQuantity(
   return {
     successCount: updates.length - errors.length,
     errorCount: errors.length,
+  };
+}
+
+/**
+ * Check if an inventory item exists on eBay for the given SKU.
+ * Returns null if not found (404). Throws for other API errors.
+ */
+export async function getInventoryItem(
+  sku: string,
+  account: MarketplaceAccount,
+): Promise<{ sku: string } | null> {
+  const response = await ebayApiCallWithPersist(
+    "GET",
+    `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
+    null,
+    account,
+  );
+
+  if (response.ok) return { sku };
+  if (response.status === 404) return null;
+
+  const text = await response.text().catch(() => "");
+  throw new Error(
+    `eBay inventory item check failed for SKU "${sku}": ${response.status} ${text}`,
+  );
+}
+
+/**
+ * Get offers for a SKU. Returns the first offer's ID and listing ID if found.
+ * Returns null if no offers exist (404). Throws for other API errors.
+ */
+export async function getOffersForSku(
+  sku: string,
+  account: MarketplaceAccount,
+): Promise<{ offerId: string; listingId: string } | null> {
+  const response = await ebayApiCallWithPersist(
+    "GET",
+    `/sell/inventory/v1/offer?sku=${encodeURIComponent(sku)}&limit=1`,
+    null,
+    account,
+  );
+
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(
+      `eBay offers lookup failed for SKU "${sku}": ${response.status} ${text}`,
+    );
+  }
+
+  const data = await response.json();
+  const offer = data.offers?.[0];
+  if (!offer) return null;
+
+  return {
+    offerId: offer.offerId ?? "",
+    listingId: offer.listing?.listingId ?? "",
   };
 }

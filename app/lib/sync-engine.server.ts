@@ -1,6 +1,7 @@
 import type { MarketplaceAccount } from "@prisma/client";
 
 import db from "../db.server";
+import type { AdminClient } from "../types/admin";
 import * as ebayAdapter from "./adapters/ebay.server";
 import { isShadowMode } from "./shadow-mode.server";
 import type { CardMetafields } from "./shopify-helpers.server";
@@ -13,7 +14,8 @@ type SyncResult = {
 };
 
 /**
- * Delist a product from all marketplaces except the one where it sold.
+ * Delist a product from all active marketplace listings.
+ * Optionally exclude a specific marketplace (e.g., the one where it sold).
  */
 export async function delistFromAllExcept(
   shopId: string,
@@ -90,7 +92,8 @@ export async function delistFromAllExcept(
 }
 
 /**
- * Relist a product on all marketplaces where it was previously delisted.
+ * Mark previously delisted listings as pending for relisting.
+ * Note: this updates the database state only; no external marketplace API calls are made.
  */
 export async function relistAll(
   shopId: string,
@@ -177,4 +180,148 @@ export async function createEbayListing(
       details: JSON.stringify({ title: product.title, error: result.error }),
     },
   });
+}
+
+export interface ReconcileResult {
+  delisted: number;
+  relisted: number;
+  errors: number;
+  checked: number;
+}
+
+const INVENTORY_QUERY = `
+  query productInventory($id: ID!) {
+    product(id: $id) {
+      totalInventory
+    }
+  }
+`;
+
+/**
+ * Reconcile inventory state for a single shop.
+ * Delists active listings with 0 inventory, relists delisted listings with restored inventory.
+ */
+export async function reconcileShop(
+  shopId: string,
+  admin: AdminClient,
+): Promise<ReconcileResult> {
+  let shopDelisted = 0;
+  let shopRelisted = 0;
+  let shopErrors = 0;
+
+  const activeListings = await db.marketplaceListing.findMany({
+    where: { shopId, status: "active" },
+    select: { shopifyProductId: true, marketplace: true, id: true },
+  });
+
+  const delistedListings = await db.marketplaceListing.findMany({
+    where: { shopId, status: "delisted" },
+    select: { shopifyProductId: true, marketplace: true, id: true },
+  });
+
+  const productIds = [
+    ...new Set([
+      ...activeListings.map((l) => l.shopifyProductId),
+      ...delistedListings.map((l) => l.shopifyProductId),
+    ]),
+  ];
+
+  const inventoryByProduct = new Map<string, number>();
+  let queryFailures = 0;
+  for (const productId of productIds) {
+    try {
+      const response = await admin.graphql(INVENTORY_QUERY, {
+        variables: { id: productId },
+      });
+      const payload = (await response.json()) as {
+        data: { product: { totalInventory: number } | null };
+        errors?: Array<{ message: string }>;
+      };
+
+      if (payload.errors?.length) {
+        queryFailures++;
+        console.error(
+          `GraphQL errors fetching inventory for ${productId}:`,
+          payload.errors.map((e) => e.message).join("; "),
+        );
+        continue;
+      }
+
+      if (payload.data.product === null) {
+        // Product genuinely deleted — treat as 0
+        inventoryByProduct.set(productId, 0);
+      } else {
+        inventoryByProduct.set(productId, payload.data.product.totalInventory ?? 0);
+      }
+    } catch (err) {
+      queryFailures++;
+      console.error(`Failed to fetch inventory for ${productId}:`, err);
+      // Do NOT set to 0 — skip this product to avoid false delisting
+    }
+  }
+
+  // Abort if too many queries failed (likely systemic issue like API outage)
+  if (queryFailures > 0 && queryFailures >= productIds.length * 0.5) {
+    throw new Error(
+      `Reconciliation aborted: ${queryFailures}/${productIds.length} inventory queries failed. Possible API outage.`,
+    );
+  }
+
+  const activeProductIds = new Set(activeListings.map((l) => l.shopifyProductId));
+  for (const productId of activeProductIds) {
+    const qty = inventoryByProduct.get(productId);
+    if (qty === undefined) continue; // Query failed — skip rather than falsely delist
+    if (qty === 0) {
+      try {
+        const results = await delistFromAllExcept(shopId, productId);
+        shopDelisted += results.filter((r) => r.success).length;
+        shopErrors += results.filter((r) => !r.success).length;
+      } catch (err) {
+        shopErrors++;
+        console.error(
+          `Failed to delist product ${productId}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+  }
+
+  const delistedProductIds = new Set(delistedListings.map((l) => l.shopifyProductId));
+  for (const productId of delistedProductIds) {
+    const qty = inventoryByProduct.get(productId);
+    if (qty === undefined) continue; // Query failed — skip
+    if (qty > 0) {
+      try {
+        const results = await relistAll(shopId, productId);
+        shopRelisted += results.filter((r) => r.success).length;
+        shopErrors += results.filter((r) => !r.success).length;
+      } catch (err) {
+        shopErrors++;
+        console.error(
+          `Failed to relist product ${productId}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+  }
+
+  const totalErrors = shopErrors + queryFailures;
+
+  await db.syncLog.create({
+    data: {
+      shopId,
+      marketplace: "all",
+      action: "reconcile",
+      status: totalErrors > 0 ? "error" : "success",
+      details: JSON.stringify({
+        checked: productIds.length,
+        delisted: shopDelisted,
+        relisted: shopRelisted,
+        errors: totalErrors,
+        queryFailures,
+      }),
+    },
+  });
+
+  return { delisted: shopDelisted, relisted: shopRelisted, errors: totalErrors, checked: productIds.length };
 }
