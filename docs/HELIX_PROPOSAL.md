@@ -11,7 +11,8 @@
   <a href="#whats-already-built">What's Built</a> &middot;
   <a href="#proposed-api">Proposed API</a> &middot;
   <a href="#listing-schema">Schema</a> &middot;
-  <a href="#phased-rollout">Rollout</a>
+  <a href="#phased-rollout">Rollout</a> &middot;
+  <a href="OPTION_B_IMPLEMENTATION.md">Option B Implementation Guide</a>
 </p>
 
 ---
