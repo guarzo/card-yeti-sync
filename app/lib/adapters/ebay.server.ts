@@ -1,10 +1,12 @@
 import type { MarketplaceAccount } from "@prisma/client";
+import db from "../../db.server";
 import { ebayApiCall } from "../ebay-client.server";
 import {
   mapToInventoryItem,
   mapToOffer,
   type EbayPolicyIds,
 } from "../mappers/ebay-mapper";
+import { isShadowMode, compareWithEbayState, logShadowAction } from "../shadow-mode.server";
 import type { CardMetafields } from "../shopify-helpers.server";
 
 function delay(ms: number): Promise<void> {
@@ -36,6 +38,22 @@ export async function listProduct(
   const sku = variant.sku || `CY-${product.id.split("/").pop()}`;
   const inventoryItem = mapToInventoryItem(product, metafields, images);
   const offer = mapToOffer(product, variant, metafields, policyIds);
+
+  if (isShadowMode()) {
+    const comparison = await compareWithEbayState(sku, "list", {
+      title: product.title,
+      sku,
+      price: variant.price,
+    }, account);
+    await logShadowAction(account.shopId, product.id, "list", comparison);
+    console.log(`[SHADOW] Would list ${product.title} (SKU: ${sku}) — match: ${comparison.match}`);
+    return {
+      marketplaceId: `shadow-${Date.now()}`,
+      offerId: `shadow-${Date.now()}`,
+      url: "",
+      status: "active",
+    };
+  }
 
   // Step 1: Create or replace inventory item
   const { response: itemResponse } = await ebayApiCall(
@@ -99,6 +117,18 @@ export async function updateProduct(
   images: string[],
   account: MarketplaceAccount,
 ): Promise<{ status: "active" | "error"; error?: string }> {
+  if (isShadowMode()) {
+    const comparison = await compareWithEbayState(sku, "update", {
+      title: product.title,
+      sku,
+      offerId,
+      price: variant.price,
+    }, account);
+    await logShadowAction(account.shopId, undefined, "update", comparison);
+    console.log(`[SHADOW] Would update SKU ${sku} — match: ${comparison.match}`);
+    return { status: "active" };
+  }
+
   const inventoryItem = mapToInventoryItem(product, metafields, images);
 
   const { response: itemResponse } = await ebayApiCall(
@@ -139,6 +169,18 @@ export async function delistProduct(
   offerId: string,
   account: MarketplaceAccount,
 ): Promise<{ status: "delisted" | "error"; error?: string }> {
+  if (isShadowMode()) {
+    await logShadowAction(account.shopId, undefined, "delist", {
+      intended: "delist",
+      intendedParams: { offerId },
+      actualState: null,
+      match: true,
+      discrepancies: [],
+    });
+    console.log(`[SHADOW] Would delist offer ${offerId}`);
+    return { status: "delisted" };
+  }
+
   const { response } = await ebayApiCall(
     "POST",
     `/sell/inventory/v1/offer/${offerId}/withdraw`,
@@ -158,6 +200,25 @@ export async function bulkUpdatePriceQuantity(
   updates: { offerId: string; sku: string; price?: string; quantity?: number }[],
   account: MarketplaceAccount,
 ): Promise<{ successCount: number; errorCount: number }> {
+  if (isShadowMode()) {
+    console.log(`[SHADOW] Would bulk update ${updates.length} price/qty entries`);
+    await db.syncLog.create({
+      data: {
+        shopId: account.shopId,
+        marketplace: "ebay",
+        action: "shadow_bulk_update",
+        status: "success",
+        details: JSON.stringify({
+          shadow: true,
+          intended: "bulk_update",
+          count: updates.length,
+          updates: updates.map((u) => ({ offerId: u.offerId, sku: u.sku, price: u.price, quantity: u.quantity })),
+        }),
+      },
+    });
+    return { successCount: updates.length, errorCount: 0 };
+  }
+
   const requests = updates.map((u) => ({
     offerId: u.offerId,
     sku: u.sku,
