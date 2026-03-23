@@ -17,6 +17,7 @@ import { ConnectionCard } from "../components/ConnectionCard";
 import { StatCard } from "../components/StatCard";
 import { RelativeTime } from "../components/RelativeTime";
 import { DisconnectButton } from "../components/DisconnectButton";
+import { getAccountSettings } from "../lib/account-settings.server";
 
 interface ErrorListing {
   id: string;
@@ -52,6 +53,8 @@ interface LoaderData {
   productTitles: Record<string, string>;
   shadowMode: boolean;
   shadowStats: ShadowStats;
+  inventorySyncEnabled: boolean;
+  crossChannelDelistEnabled: boolean;
 }
 
 export const meta: MetaFunction = () => [{ title: "eBay | Card Yeti Sync" }];
@@ -139,8 +142,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const state = generateHmacState(shop, nonce);
   const authUrl = getAuthorizationUrl(state);
 
-  const accountSettings = (account?.settings ?? {}) as Record<string, unknown>;
-  const shadowMode = accountSettings.shadowMode === true;
+  const settings = account ? getAccountSettings(account) : null;
+  const shadowMode = settings?.shadowMode ?? false;
+  const inventorySyncEnabled = settings?.inventorySyncEnabled ?? true;
+  const crossChannelDelistEnabled = settings?.crossChannelDelistEnabled ?? true;
 
   let shadowStats: ShadowStats = { total: 0, matches: 0, discrepancies: 0, recent: [] };
   if (shadowMode) {
@@ -177,6 +182,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     productTitles,
     shadowMode,
     shadowStats,
+    inventorySyncEnabled,
+    crossChannelDelistEnabled,
   } satisfies LoaderData;
 };
 
@@ -269,6 +276,36 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return Response.json({ success: true, shadowMode: newShadowMode });
   }
 
+  if (intent === "toggle-inventory-sync") {
+    const account = await db.marketplaceAccount.findFirst({
+      where: { shopId: session.shop, marketplace: "ebay" },
+    });
+    if (!account) return Response.json({ error: "Not connected" }, { status: 400 });
+
+    const currentSettings = (account.settings ?? {}) as Record<string, unknown>;
+    const newValue = !(currentSettings.inventorySyncEnabled !== false);
+    await db.marketplaceAccount.update({
+      where: { id: account.id },
+      data: { settings: { ...currentSettings, inventorySyncEnabled: newValue } },
+    });
+    return Response.json({ success: true });
+  }
+
+  if (intent === "toggle-cross-channel-delist") {
+    const account = await db.marketplaceAccount.findFirst({
+      where: { shopId: session.shop, marketplace: "ebay" },
+    });
+    if (!account) return Response.json({ error: "Not connected" }, { status: 400 });
+
+    const currentSettings = (account.settings ?? {}) as Record<string, unknown>;
+    const newValue = !(currentSettings.crossChannelDelistEnabled !== false);
+    await db.marketplaceAccount.update({
+      where: { id: account.id },
+      data: { settings: { ...currentSettings, crossChannelDelistEnabled: newValue } },
+    });
+    return Response.json({ success: true });
+  }
+
   return null;
 };
 
@@ -284,6 +321,8 @@ export default function EbaySettings() {
     productTitles,
     shadowMode,
     shadowStats,
+    inventorySyncEnabled,
+    crossChannelDelistEnabled,
   } = useLoaderData<typeof loader>();
   const [searchParams] = useSearchParams();
   const success = searchParams.get("success");
@@ -568,54 +607,41 @@ export default function EbaySettings() {
 
           {connected && <s-divider />}
 
-          <s-stack
-            direction="inline"
-            gap="base"
-            alignItems="center"
-            justifyContent="space-between"
-          >
-            <s-stack direction="block" gap="small">
-              <s-text type="strong">Auto-sync new products</s-text>
-              <s-text color="subdued">
-                Automatically list new Shopify products on eBay when created.
-              </s-text>
-            </s-stack>
-            <s-switch label="Auto-sync new products" disabled />
-          </s-stack>
+          {connected && (
+            <>
+              <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
+                <s-stack direction="block" gap="small">
+                  <s-text type="strong">Inventory sync</s-text>
+                  <s-text color="subdued">
+                    Delist from eBay when inventory reaches zero. Relist when inventory is restored.
+                  </s-text>
+                </s-stack>
+                <Form method="post">
+                  <input type="hidden" name="intent" value="toggle-inventory-sync" />
+                  <s-button variant={inventorySyncEnabled ? "primary" : "tertiary"} type="submit">
+                    {inventorySyncEnabled ? "Enabled" : "Disabled"}
+                  </s-button>
+                </Form>
+              </s-stack>
 
-          <s-divider />
+              <s-divider />
 
-          <s-stack
-            direction="inline"
-            gap="base"
-            alignItems="center"
-            justifyContent="space-between"
-          >
-            <s-stack direction="block" gap="small">
-              <s-text type="strong">Inventory sync</s-text>
-              <s-text color="subdued">
-                Delist from eBay when inventory reaches zero.
-              </s-text>
-            </s-stack>
-            <s-switch label="Inventory sync" disabled />
-          </s-stack>
-
-          <s-divider />
-
-          <s-stack
-            direction="inline"
-            gap="base"
-            alignItems="center"
-            justifyContent="space-between"
-          >
-            <s-stack direction="block" gap="small">
-              <s-text type="strong">Cross-channel delisting</s-text>
-              <s-text color="subdued">
-                Remove from eBay when a card sells on another marketplace.
-              </s-text>
-            </s-stack>
-            <s-switch label="Cross-channel delisting" disabled />
-          </s-stack>
+              <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
+                <s-stack direction="block" gap="small">
+                  <s-text type="strong">Cross-channel delisting</s-text>
+                  <s-text color="subdued">
+                    Remove from eBay when a card sells on another marketplace.
+                  </s-text>
+                </s-stack>
+                <Form method="post">
+                  <input type="hidden" name="intent" value="toggle-cross-channel-delist" />
+                  <s-button variant={crossChannelDelistEnabled ? "primary" : "tertiary"} type="submit">
+                    {crossChannelDelistEnabled ? "Enabled" : "Disabled"}
+                  </s-button>
+                </Form>
+              </s-stack>
+            </>
+          )}
         </s-stack>
       </s-section>
     </s-page>

@@ -2,6 +2,7 @@ import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { delistFromAllExcept, relistAll } from "../lib/sync-engine.server";
+import { getAccountSettings } from "../lib/account-settings.server";
 
 const INVENTORY_ITEM_QUERY = `
   query inventoryItemToProduct($id: ID!) {
@@ -47,6 +48,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (!productGid) {
     console.log(`  Inventory item ${inventoryItemId} has no associated product — skipping`);
+    return new Response();
+  }
+
+  const ebayAccount = await db.marketplaceAccount.findUnique({
+    where: { shopId_marketplace: { shopId: shop, marketplace: "ebay" } },
+  });
+  if (ebayAccount && !getAccountSettings(ebayAccount).inventorySyncEnabled) {
+    console.log("Inventory sync disabled — skipping");
     return new Response();
   }
 
