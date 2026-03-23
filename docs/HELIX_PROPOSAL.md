@@ -1,60 +1,107 @@
-# Shopify Integration for Helix
+<p align="center">
+  <img src="../public/card-yeti-logo.png" alt="Card Yeti" width="300" />
+</p>
+
+<h2 align="center">Shopify Integration Proposal for Helix</h2>
+
+<p align="center">
+  <em>A public Shopify app that lets any Pokémon card seller sync their inventory to Helix automatically</em>
+</p>
+
+<p align="center">
+  <a href="#the-idea">The Idea</a> &middot;
+  <a href="#whats-already-built">What's Built</a> &middot;
+  <a href="#proposed-api">Proposed API</a> &middot;
+  <a href="#listing-schema">Schema</a> &middot;
+  <a href="#phased-rollout">Rollout</a>
+</p>
+
+---
 
 **Date:** March 2026
 
+## The Idea
+
+A public Shopify app that lets **any** Pokémon card seller sync their inventory to Helix automatically. Any TCG seller on Shopify installs the app, connects their Helix account, and starts listing. Helix gets access to the entire Shopify TCG seller ecosystem through a single integration.
+
+> **One integration, unlimited sellers.** The app is public on the Shopify App Store, so every Pokémon card seller on Shopify becomes a potential Helix seller — no individual onboarding required.
+
 ---
 
-## Hey team!
+## What's Already Built
 
-The basic idea: **a public Shopify app that lets any Pokemon card seller sync their inventory to Helix automatically.** Any TCG seller on Shopify could install the app, connect their Helix account, and start listing. Helix gets access to the whole Shopify TCG seller ecosystem through a single integration.
+I run a Pokémon card shop on Shopify ([Card Yeti](https://cardyeti.com)) and I've been building tooling to sync inventory across eBay, Shopify, and Whatnot. Here's the current state:
 
----
+| Component | Status | Description |
+|:----------|:-------|:------------|
+| **Shopify App** | Active | Embedded admin app with priority-driven sync dashboard — at-a-glance marketplace health, sync activity, per-product listing status across all channels, and price suggestion review workflow |
+| **eBay Integration** | In Development | OAuth active, Sell Inventory API adapter + automatic policy assignment in progress |
+| **Whatnot Export** | CSV Ready | Bulk upload file generation with rich card descriptions |
+| **19 Card Metafields** | Live in Production | Structured data per card across hundreds of products |
+| **Cross-Channel Delist** | In Development | Auto-remove from other channels when a card sells |
 
-## What I've Already Built
+The app uses an **adapter pattern** — each marketplace gets its own adapter behind a consistent interface. Adding Helix would follow the same pattern as the eBay adapter already in development.
 
-I run a Pokemon card shop on Shopify (Card Yeti) and I've been syncing inventory across eBay, Shopify, and Whatnot manually using CLI scripts I wrote. It works, but it's a manual process — I'm currently building a Shopify app to automate all of it. Here's what exists today:
+<p align="center">
+  <img src="dashboard.jpg" alt="Card Yeti Dashboard" width="800" />
+</p>
 
-- **CLI-based eBay imports** — a Node script that pulls from eBay's API, parses item specifics, and creates structured Shopify products
-- **19 custom Shopify metafields** per card — structured data for card identity, grading, condition, and commerce (this is live on my store today)
-- **CLI-based Whatnot CSV export** — generates bulk upload files with rich descriptions from Shopify product data
-- **Manual cross-channel delisting** — when a card sells, I delist from other channels by hand (automating this is a key goal of the Shopify app)
+### Structured Card Data
 
-The Shopify app I'm building will automate all of this with an adapter pattern — each marketplace gets its own adapter behind a consistent interface, so adding Helix would be straightforward. The eBay integration is actively in development.
+Every card in the Shopify store has 19 custom metafields under the `card` namespace. This goes far beyond title + photos:
 
-The data model I'm already using captures way more than what most sellers provide. Instead of just a title and photos, every card has:
+<table>
+<tr>
+<td width="33%" valign="top">
 
-**Card identity:**
-- Pokemon name, set, card number, language, year, rarity
+**Card Identity**
+- Pokémon name
+- Set name
+- Card number
+- Language
+- Year
+- Rarity
 
-**Grading (for slabs):**
-- Grading company (PSA, CGC, BGS, SGC, TAG, etc.)
-- Grade, cert number, cert verification URL
-- Population at grade, population higher
-- Subgrades (BGS Centering/Edges/Surface/Corners)
+</td>
+<td width="33%" valign="top">
 
-**Condition (for raw cards):**
-- Condition (Near Mint, Lightly Played, etc.)
+**Grading (slabs)**
+- Grading company
+- Grade
+- Cert number + URL
+- Population at grade
+- Population higher
+- Subgrades (BGS)
+
+</td>
+<td width="33%" valign="top">
+
+**Condition & Commerce**
+- Condition (NM, LP, etc.)
 - Centering measurements
-- Detailed condition notes
+- Condition notes
+- Market comp pricing
+- Source tracking (eBay IDs)
 
-**Commerce:**
-- Market comparable pricing (eBay comps)
-- Source tracking (eBay item IDs, SKUs)
+</td>
+</tr>
+</table>
 
-This schema is live on my Shopify store across hundreds of products. I think this structured data would be really valuable for Helix's search, filtering, and analytics — and can share the schema as a starting point for whatever seller API we design.
+> This schema is live across hundreds of products. It maps 1:1 to the proposed Helix listing schema — zero data transformation gaps.
 
 ---
 
-## How I Think the API Could Work
+## Proposed API
 
-I think the stack is Next.js + Rails on Vercel, so I tried to keep this proposal practical — stuff that's simple to build incrementally. Start with listing endpoints, add webhooks later. Totally open to feedback on all of this.
+Designed to be practical and incremental. Start with listing endpoints, add webhooks later.
 
 ### Authentication
 
-OAuth 2.0 with API keys per seller. Rails has great tooling for this (Doorkeeper gem).
+OAuth 2.0 with API keys per seller. (Rails has great tooling for this via the Doorkeeper gem.)
 
-```
+```http
 POST /api/v1/auth/token
+
 {
   "grant_type": "authorization_code",
   "code": "<authorization_code>",
@@ -62,8 +109,9 @@ POST /api/v1/auth/token
   "client_secret": "<app_client_secret>",
   "redirect_uri": "<callback_url>"
 }
+```
 
-Response:
+```json
 {
   "access_token": "...",
   "refresh_token": "...",
@@ -76,39 +124,38 @@ Response:
 
 #### Listings
 
-```
-POST   /api/v1/listings              Create a single listing
-POST   /api/v1/listings/bulk         Create/update up to 50 listings
-GET    /api/v1/listings              List seller's listings (paginated)
-GET    /api/v1/listings/:id          Get listing details
-PUT    /api/v1/listings/:id          Update a listing
-DELETE /api/v1/listings/:id          Delist / remove
-```
+| Method | Path | Description |
+|:-------|:-----|:------------|
+| `POST` | `/api/v1/listings` | Create a single listing |
+| `POST` | `/api/v1/listings/bulk` | Create/update up to 50 listings |
+| `GET` | `/api/v1/listings` | List seller's listings (paginated) |
+| `GET` | `/api/v1/listings/:id` | Get listing details |
+| `PUT` | `/api/v1/listings/:id` | Update a listing |
+| `DELETE` | `/api/v1/listings/:id` | Delist / remove |
 
 #### Inventory
 
-```
-PUT    /api/v1/listings/:id/inventory    Update availability (quantity, status)
-POST   /api/v1/inventory/bulk            Bulk inventory update
-```
+| Method | Path | Description |
+|:-------|:-----|:------------|
+| `PUT` | `/api/v1/listings/:id/inventory` | Update availability (quantity, status) |
+| `POST` | `/api/v1/inventory/bulk` | Bulk inventory update |
 
 #### Orders (read-only for sellers)
 
-```
-GET    /api/v1/orders                    List seller's orders (paginated)
-GET    /api/v1/orders/:id                Order details
-```
+| Method | Path | Description |
+|:-------|:-----|:------------|
+| `GET` | `/api/v1/orders` | List seller's orders (paginated) |
+| `GET` | `/api/v1/orders/:id` | Order details |
 
 #### Pricing Data
 
- Helix's real-time bid/ask market and AI-powered price forecasting are such a huge differentiator — I think exposing pricing data via the API could be a massive driver for seller adoption. Imagine sellers pulling Helix market data to price their inventory across *all* their channels.
+> Helix's real-time bid/ask market and AI-powered price forecasting are a massive differentiator. Exposing pricing data via the API could be a huge driver for seller adoption — sellers pulling Helix market data to price their inventory across **all** channels.
 
-```
-GET    /api/v1/pricing/:card_identifier  Get current market data for a card
-GET    /api/v1/pricing/bulk              Bulk pricing lookup (up to 50 cards)
-```
+| Method | Path | Description |
+|:-------|:-----|:------------|
+| `GET` | `/api/v1/pricing/:card_identifier` | Current market data for a card |
+| `GET` | `/api/v1/pricing/bulk` | Bulk pricing lookup (up to 50 cards) |
 
-Response:
 ```json
 {
   "card_identifier": "base-set-4-psa-9",
@@ -122,25 +169,27 @@ Response:
 }
 ```
 
-The feedback loop here is really cool: sellers use Helix's pricing to set competitive prices everywhere, which builds Helix's brand as *the* pricing authority for Pokemon cards. Even sellers who don't list on Helix directly would be consuming Helix pricing data.
+> **The flywheel:** Sellers use Helix pricing to set competitive prices everywhere, which builds Helix's brand as *the* pricing authority for Pokémon cards. Even sellers who don't list on Helix directly would be consuming Helix pricing data.
 
 #### Webhooks
 
-```
-POST   /api/v1/webhooks                 Register a webhook URL
-GET    /api/v1/webhooks                 List registered webhooks
-DELETE /api/v1/webhooks/:id             Unregister
-```
+| Method | Path | Description |
+|:-------|:-----|:------------|
+| `POST` | `/api/v1/webhooks` | Register a webhook URL |
+| `GET` | `/api/v1/webhooks` | List registered webhooks |
+| `DELETE` | `/api/v1/webhooks/:id` | Unregister |
 
-### Rate Limiting
+#### Rate Limiting
 
-100 requests/minute per seller feels right for launch. We can always tighten it later based on what we see.
+100 requests/minute per seller. Rate limits can be adjusted based on usage patterns post-launch.
 
 ---
 
-## Listing Data Schema
+## Listing Schema
 
-Here's what I'm thinking for the listing object shape. The `card` sub-object is where all the structured data lives — the stuff that makes Helix's search, filtering, and analytics way better than what you get from a plain title + photo listing.
+The `card` sub-object is where all the structured data lives — the data that powers Helix's search, filtering, and analytics far beyond what a plain title + photo listing provides.
+
+### Graded card example
 
 ```json
 {
@@ -209,30 +258,43 @@ For ungraded singles, `grading` is null and `raw_condition` gets populated:
 }
 ```
 
-### Listing types
+### Enums
 
-| Type | Description |
-|------|-------------|
-| `fixed_price` | Standard buy-it-now listing |
-| `bid_ask` | Real-time bid/ask market (Helix's signature feature) |
-| `escrow_trade` | Middleman card-for-card trade |
+<table>
+<tr>
+<td valign="top">
 
-### Condition values
+**Listing Types**
 
 | Value | Description |
-|-------|-------------|
-| `graded` | Professionally graded slab (PSA, CGC, BGS, SGC, TAG, etc.) |
+|:------|:------------|
+| `fixed_price` | Standard buy-it-now |
+| `bid_ask` | Real-time bid/ask market |
+| `escrow_trade` | Middleman card-for-card trade |
+
+</td>
+<td valign="top">
+
+**Condition Values**
+
+| Value | Description |
+|:------|:------------|
+| `graded` | Professionally graded slab |
 | `raw` | Ungraded single card |
-| `sealed` | Factory-sealed product (boxes, ETBs, packs) |
+| `sealed` | Factory-sealed product |
+
+</td>
+</tr>
+</table>
 
 ---
 
 ## Field Mapping
 
-Here's how the Shopify metafields I already use on my store map to the proposed schema — basically a 1:1 match, which means no data transformation gaps:
+How the Shopify metafields already live on the store map to the proposed schema — a 1:1 match with no data transformation gaps:
 
-| Shopify Metafield (`card.*`) | Helix Field | Notes |
-|---|---|---|
+| Shopify Metafield (`card.*`) | Helix Field | Transform |
+|:-----------------------------|:------------|:----------|
 | `pokemon` | `card.pokemon` | Direct |
 | `set_name` | `card.set_name` | Direct |
 | `number` | `card.card_number` | Direct |
@@ -249,19 +311,17 @@ Here's how the Shopify metafields I already use on my store map to the proposed 
 | `condition` | `card.raw_condition.condition` | Raw cards only |
 | `centering` | `card.raw_condition.centering` | Direct |
 | `condition_notes` | `card.raw_condition.notes` | Direct |
-| `type_label` | `condition` enum | Maps "Graded Slab" to "graded", etc. |
-| `ebay_item_id` | `external_refs.ebay_item_id` | Cross-reference |
-| `ebay_comp` | *(not listed, but available)* | Could become `market_data.ebay_comp` |
+| `type_label` | `condition` enum | Maps "Graded Slab" to `graded`, etc. |
+| `ebay_item_id` | `external_refs.ebay_item_id` | Direct |
+| `ebay_comp` | *(available, not mapped)* | Could become `market_data.ebay_comp` |
 
 ---
 
 ## Webhook Events
 
-Once we're ready for real-time notifications, here's what I think we'd need:
-
 ### `order.created`
 
-This is the big one. When a buyer purchases a listing on Helix, I need to know immediately so I can delist that card from Shopify, eBay, and Whatnot. Preventing double-sells is the whole point of cross-channel sync.
+> This is the critical one. When a buyer purchases on Helix, Card Yeti needs to know immediately to delist from Shopify, eBay, and Whatnot. **Preventing double-sells is the entire point of cross-channel sync.**
 
 ```json
 {
@@ -293,86 +353,119 @@ For when a listing is approved, rejected, expired, or sold through other means.
 }
 ```
 
-### Webhook delivery
+### Webhook Delivery
 
-- HTTPS endpoints only
-- Signature verification (HMAC-SHA256 with shared secret)
-- Retry on failure: 3 attempts with exponential backoff
-- Challenge-response handshake for endpoint verification
+| Property | Value |
+|:---------|:------|
+| **Transport** | HTTPS only |
+| **Verification** | HMAC-SHA256 with shared secret |
+| **Retries** | 3 attempts with exponential backoff |
+| **Validation** | Challenge-response handshake for endpoint verification |
 
 ---
 
-## How We Could Phase This
+## Phased Rollout
+
+<table>
+<tr>
+<td width="33%" valign="top">
 
 ### Phase 1: Bulk Import
 
-**Helix side:**
-- `POST /api/v1/auth/token` (OAuth)
-- `POST /api/v1/listings/bulk` (bulk create)
-- `GET /api/v1/listings` (list seller's listings)
+**Helix builds:**
+- `POST /api/v1/auth/token`
+- `POST /api/v1/listings/bulk`
+- `GET /api/v1/listings`
 
-**Shopify app (my side):**
-- Helix adapter in the sync app (same pattern as the eBay adapter I'm building now)
-- Settings page: connect Helix account, configure sync rules
-- Bulk sync: push all active inventory to Helix
+**Card Yeti builds:**
+- Helix adapter (same pattern as eBay)
+- Settings page: connect + configure
+- One-click bulk sync
 
-**Result:** Sellers can sync their Shopify inventory to Helix with one click.
+**Result:**
+Sellers sync their Shopify inventory to Helix with one click.
+
+</td>
+<td width="33%" valign="top">
 
 ### Phase 2: Real-Time Sync
 
-**Helix side adds:**
-- `PUT /api/v1/listings/:id` (update)
-- `DELETE /api/v1/listings/:id` (delist)
-- `PUT /api/v1/listings/:id/inventory` (inventory update)
+**Helix adds:**
+- `PUT /api/v1/listings/:id`
+- `DELETE /api/v1/listings/:id`
+- `PUT .../inventory`
 
-**Shopify app adds:**
-- Webhook-driven sync: product changes in Shopify auto-update on Helix
-- Inventory sync: sold items auto-delist from Helix
+**Card Yeti adds:**
+- Webhook-driven sync
+- Auto-delist on inventory change
 
-**Result:** Hands-free ongoing sync. Changes in Shopify reflect on Helix automatically.
+**Result:**
+Hands-free ongoing sync. Changes in Shopify reflect on Helix automatically.
+
+</td>
+<td width="33%" valign="top">
 
 ### Phase 3: Bidirectional + Pricing
 
-**Helix side adds:**
-- `POST /api/v1/webhooks` (webhook registration)
-- `order.created` and `listing.status_changed` webhook events
-- `GET /api/v1/orders` (order details)
-- `GET /api/v1/pricing/:card_identifier` (market data)
-- `GET /api/v1/pricing/bulk` (bulk pricing lookup)
+**Helix adds:**
+- Webhook registration + events
+- `GET /api/v1/orders`
+- `GET /api/v1/pricing/*`
 
-**Shopify app adds:**
-- Inbound webhook handler: Helix sales trigger cross-channel delisting
-- Order visibility in the app's dashboard
-- **Price intelligence**: Pull Helix market data to show sellers current bid/ask, recent sales, and 30-day trends. Optionally auto-suggest price adjustments across all channels.
+**Card Yeti adds:**
+- Inbound webhook handler
+- Price review workflow — Helix pricing data feeds suggested price updates directly into the dashboard, where sellers review and approve before syncing across all channels
 
-**Result:** Full bidirectional sync plus pricing intelligence. Helix becomes the pricing engine sellers rely on everywhere.
+**Result:**
+Full bidirectional sync. Helix pricing data drives seller decisions across every marketplace — building Helix's brand as the pricing authority.
+
+</td>
+</tr>
+</table>
 
 ---
 
-## Why This Is a Good Fit
+## Why This Makes Sense
 
-I don't want to oversell this — just laying out why I think it makes sense:
+<table>
+<tr>
+<td width="50%" valign="top">
 
-1. **It's an ecosystem play.** The Shopify app will be public, so it's not just my store. Any Pokemon card seller on Shopify could connect to Helix through it. One integration, unlimited sellers.
+**For Helix**
 
-2. **The data is already structured.** Most sellers list with a title and photos. This integration delivers fully parsed card metadata — pokemon, set, number, grade, cert, population, condition — ready for Helix's search and analytics. No data entry required on the seller's part.
+- **Instant seller base** — Every Shopify Pokémon card seller is a potential Helix seller through one app install
+- **Rich structured data** — 19 parsed card fields per listing, ready for search, filtering, and analytics
+- **Pricing authority** — Sellers see Helix price suggestions directly in their dashboard and approve them across all channels, building Helix's brand as where prices are set
 
-3. **Pricing authority.** If we expose Helix's pricing data through the API, every seller using the sync app becomes a Helix pricing data consumer — even across other channels. That positions Helix as where prices are set.
+</td>
+<td width="50%" valign="top">
 
-4. **Easy onboarding for new sellers.** Any Helix seller with a Shopify store can be live in minutes: install the app, connect, sync.
+**For Sellers**
+
+- **Zero-friction onboarding** — Install app, connect, sync. Live on Helix in minutes
+- **No double-sells** — Cross-channel delisting happens automatically
+- **Better pricing** — Helix market data surfaces as price suggestions in the dashboard, reviewable and approvable before syncing to all channels
+- **Lower fees** — 4.9% vs 12.9% on eBay
+
+</td>
+</tr>
+</table>
 
 ---
 
 ## Technical Details
 
-For anyone curious about the Shopify app side:
+For anyone curious about the app side:
 
-- Built with React Router v7 (Shopify's recommended framework), deploying on Fly.io
-- Prisma + SQLite (dev) / Postgres (prod) for multi-tenant data storage
-- Database schema already supports multi-marketplace accounts, listing tracking, and sync logging
-- eBay OAuth integration is in development now; marketplace adapters follow a consistent interface so adding Helix is the same pattern
-- The listing schema maps directly from existing Shopify metafield definitions, so there are no data transformation gaps
-- I've been running the manual CLI version of this workflow for a while, so the data model and field mappings are battle-tested even though the app itself is new
+- **Framework:** React Router v7 (Shopify's recommended), deploying on Fly.io
+- **Database:** Prisma + SQLite (dev) / PostgreSQL (prod) for multi-tenant data
+- **Architecture:** Adapter pattern — each marketplace implements a consistent interface for listing, delisting, and inventory updates
+- **Data model:** Supports multi-marketplace accounts, listing state tracking, sync audit logs, and a price suggestion review pipeline for approving pricing changes before they propagate
+- **Field mappings:** 1:1 from existing Shopify metafield definitions — battle-tested across hundreds of live products
+- **eBay integration:** OAuth + Sell API actively in development, proving the adapter pattern
 
 ---
 
+<p align="center">
+  <em>Questions or feedback? Let's build this.</em>
+</p>

@@ -113,7 +113,6 @@ export async function refreshAccessToken(refreshToken: string): Promise<{
   expiresIn: number;
 }> {
   const endpoints = getEndpoints();
-  const { clientId } = getEnv();
 
   const res = await fetch(endpoints.token, {
     method: "POST",
@@ -149,7 +148,7 @@ export async function refreshAccessToken(refreshToken: string): Promise<{
 export async function ebayApiCall(
   method: string,
   path: string,
-  body: unknown | null,
+  body: Record<string, unknown> | null,
   account: MarketplaceAccount,
 ): Promise<{ response: Response; updatedTokens: TokenUpdate | null }> {
   const endpoints = getEndpoints();
@@ -189,3 +188,4 @@ export type TokenUpdate = {
   accessToken: string;
   tokenExpiry: Date;
 };
+
