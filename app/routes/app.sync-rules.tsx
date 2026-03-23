@@ -1,19 +1,11 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, useLoaderData } from "react-router";
+import { Form, useActionData, useLoaderData } from "react-router";
 import type { Prisma } from "@prisma/client";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
 import { MARKETPLACE_CONFIG, type MarketplaceKey } from "../lib/marketplace-config";
-import { type SyncRules, DEFAULT_SYNC_RULES } from "../lib/sync-rules";
+import { type SyncRules, DEFAULT_SYNC_RULES, PRODUCT_TYPES } from "../lib/sync-rules";
 import { getSyncRules } from "../lib/sync-rules.server";
-
-const PRODUCT_TYPES = [
-  "Graded Card",
-  "Graded Slab",
-  "Raw Single",
-  "Sealed Product",
-  "Curated Lot",
-];
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -94,6 +86,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
 export default function SyncRulesPage() {
   const { rulesByMarketplace, connectedMarketplaces } = useLoaderData<typeof loader>();
+  const actionData = useActionData<typeof action>();
 
   if (connectedMarketplaces.length === 0) {
     return (
@@ -142,9 +135,12 @@ export default function SyncRulesPage() {
                     ))}
                   </s-stack>
 
-                  <s-text type="strong">Exclude Tags</s-text>
+                  <label htmlFor={`excludeTags-${mp}`}>
+                    <s-text type="strong">Exclude Tags</s-text>
+                  </label>
                   <s-text color="subdued">Comma-separated list of tags to exclude from sync</s-text>
                   <input
+                    id={`excludeTags-${mp}`}
                     type="text"
                     name="excludeTags"
                     defaultValue={rules.excludeTags.join(", ")}
@@ -154,7 +150,11 @@ export default function SyncRulesPage() {
 
                   <s-text type="strong">Price Range</s-text>
                   <s-stack direction="inline" gap="base" alignItems="center">
+                    <label htmlFor={`priceMin-${mp}`}>
+                      <s-text>Min</s-text>
+                    </label>
                     <input
+                      id={`priceMin-${mp}`}
                       type="number"
                       name="priceMin"
                       defaultValue={rules.priceMin ?? ""}
@@ -162,7 +162,11 @@ export default function SyncRulesPage() {
                       style={{ width: "100px", padding: "0.5rem" }}
                     />
                     <s-text>to</s-text>
+                    <label htmlFor={`priceMax-${mp}`}>
+                      <s-text>Max</s-text>
+                    </label>
                     <input
+                      id={`priceMax-${mp}`}
                       type="number"
                       name="priceMax"
                       defaultValue={rules.priceMax ?? ""}
@@ -180,6 +184,11 @@ export default function SyncRulesPage() {
                     <s-text>Auto-sync new products</s-text>
                   </label>
 
+                  {actionData && "error" in actionData && (
+                    <s-banner tone="critical">
+                      {(actionData as { error: string }).error}
+                    </s-banner>
+                  )}
                   <s-button variant="primary" type="submit">Save {label} Rules</s-button>
                 </s-stack>
               </Form>
