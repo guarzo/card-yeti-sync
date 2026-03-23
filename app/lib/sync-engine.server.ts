@@ -178,3 +178,106 @@ export async function createEbayListing(
     },
   });
 }
+
+export interface ReconcileResult {
+  delisted: number;
+  relisted: number;
+  errors: number;
+  checked: number;
+}
+
+const INVENTORY_QUERY = `
+  query productInventory($id: ID!) {
+    product(id: $id) {
+      totalInventory
+    }
+  }
+`;
+
+/**
+ * Reconcile inventory state for a single shop.
+ * Delists active listings with 0 inventory, relists delisted listings with restored inventory.
+ */
+export async function reconcileShop(
+  shopId: string,
+  admin: { graphql: (query: string, options?: { variables: Record<string, unknown> }) => Promise<Response> },
+): Promise<ReconcileResult> {
+  let shopDelisted = 0;
+  let shopRelisted = 0;
+  let shopErrors = 0;
+
+  const activeListings = await db.marketplaceListing.findMany({
+    where: { shopId, status: "active" },
+    select: { shopifyProductId: true, marketplace: true, id: true },
+  });
+
+  const delistedListings = await db.marketplaceListing.findMany({
+    where: { shopId, status: "delisted" },
+    select: { shopifyProductId: true, marketplace: true, id: true },
+  });
+
+  const productIds = [
+    ...new Set([
+      ...activeListings.map((l) => l.shopifyProductId),
+      ...delistedListings.map((l) => l.shopifyProductId),
+    ]),
+  ];
+
+  const inventoryByProduct = new Map<string, number>();
+  for (const productId of productIds) {
+    try {
+      const response = await admin.graphql(INVENTORY_QUERY, {
+        variables: { id: productId },
+      });
+      const { data } = (await response.json()) as {
+        data: { product: { totalInventory: number } | null };
+      };
+      inventoryByProduct.set(productId, data.product?.totalInventory ?? 0);
+    } catch {
+      inventoryByProduct.set(productId, 0);
+    }
+  }
+
+  for (const listing of activeListings) {
+    const qty = inventoryByProduct.get(listing.shopifyProductId) ?? 0;
+    if (qty === 0) {
+      try {
+        const results = await delistFromAllExcept(shopId, listing.shopifyProductId);
+        shopDelisted += results.filter((r) => r.success).length;
+        shopErrors += results.filter((r) => !r.success).length;
+      } catch {
+        shopErrors++;
+      }
+    }
+  }
+
+  for (const listing of delistedListings) {
+    const qty = inventoryByProduct.get(listing.shopifyProductId) ?? 0;
+    if (qty > 0) {
+      try {
+        const results = await relistAll(shopId, listing.shopifyProductId);
+        shopRelisted += results.filter((r) => r.success).length;
+        shopErrors += results.filter((r) => !r.success).length;
+      } catch {
+        shopErrors++;
+      }
+    }
+  }
+
+  await db.syncLog.create({
+    data: {
+      shopId,
+      marketplace: "all",
+      action: "reconcile",
+      status: shopErrors > 0 ? "error" : "success",
+      details: JSON.stringify({
+        checked: productIds.length,
+        delisted: shopDelisted,
+        relisted: shopRelisted,
+        errors: shopErrors,
+      }),
+    },
+  });
+
+  return { delisted: shopDelisted, relisted: shopRelisted, errors: shopErrors, checked: productIds.length };
+}

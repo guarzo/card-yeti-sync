@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import type {
   HeadersFunction,
   LoaderFunctionArgs,
@@ -18,6 +18,7 @@ import { StatCard } from "../components/StatCard";
 import { RelativeTime } from "../components/RelativeTime";
 import { DisconnectButton } from "../components/DisconnectButton";
 import { getAccountSettings } from "../lib/account-settings.server";
+import { reconcileShop } from "../lib/sync-engine.server";
 
 interface ErrorListing {
   id: string;
@@ -188,7 +189,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const shop = session.shop;
   const formData = await request.formData();
   const intent = formData.get("intent");
@@ -306,6 +307,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return Response.json({ success: true });
   }
 
+  if (intent === "reconcile") {
+    const result = await reconcileShop(shop, admin);
+    return Response.json({
+      success: true,
+      message: `Reconciled: ${result.delisted} delisted, ${result.relisted} relisted, ${result.errors} errors`,
+      ...result,
+    });
+  }
+
   return null;
 };
 
@@ -328,8 +338,9 @@ export default function EbaySettings() {
   const success = searchParams.get("success");
   const error = searchParams.get("error");
 
+  const [now] = useState(() => Date.now());
   const tokenExpired =
-    tokenExpiry != null && new Date(tokenExpiry).getTime() <= Date.now();
+    tokenExpiry != null && new Date(tokenExpiry).getTime() <= now;
   const tokenDays =
     tokenExpiry && !tokenExpired ? daysUntil(tokenExpiry) : null;
 
@@ -641,6 +652,23 @@ export default function EbaySettings() {
                 </Form>
               </s-stack>
             </>
+          )}
+
+          {connected && <s-divider />}
+
+          {connected && (
+            <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
+              <s-stack direction="block" gap="small">
+                <s-text type="strong">Reconciliation</s-text>
+                <s-text color="subdued">
+                  Check all listings against current inventory and correct any drift.
+                </s-text>
+              </s-stack>
+              <Form method="post">
+                <input type="hidden" name="intent" value="reconcile" />
+                <s-button type="submit">Reconcile Now</s-button>
+              </Form>
+            </s-stack>
           )}
         </s-stack>
       </s-section>
