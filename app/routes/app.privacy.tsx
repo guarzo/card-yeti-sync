@@ -14,7 +14,7 @@ export default function PrivacyPolicy() {
             status records in our database.
           </s-text>
 
-          <s-text type="strong">What We Don't Collect</s-text>
+          <s-text type="strong">What We Don&apos;t Collect</s-text>
           <s-text>
             We do not collect, store, or process customer personal information.
             The app only works with product and inventory data. We do not sell or
@@ -26,7 +26,7 @@ export default function PrivacyPolicy() {
           <s-text>
             When you connect a marketplace (eBay, Whatnot, Helix), we store OAuth
             tokens securely in our database. These tokens are only used to
-            communicate with the marketplace's API on your behalf. You can
+            communicate with the marketplace&apos;s API on your behalf. You can
             disconnect at any time, which deletes the stored tokens.
           </s-text>
 

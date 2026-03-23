@@ -1,4 +1,7 @@
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
 
 name: CI
 
@@ -11,6 +14,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20.19
+          cache: 'npm'
 
       - name: Install dependencies
         run: npm install
@@ -23,6 +27,12 @@ jobs:
 
       - name: Validate Prisma
         run: npx prisma generate && npx prisma validate
+
+      - name: Check Prisma migration drift
+        run: npx prisma migrate diff --from-schema-datamodel prisma/schema.prisma --to-migrations prisma/migrations --exit-code
+
+      - name: Run tests
+        run: npm test
 
       - name: Build application
         run: npm run build

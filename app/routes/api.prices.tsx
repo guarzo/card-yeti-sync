@@ -117,7 +117,7 @@ async function fetchAllProductNodes(
  * GET: Download current prices as CSV.
  */
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { admin, session } = await authenticate.admin(request);
+  const { admin } = await authenticate.admin(request);
 
   const nodes = await fetchAllProductNodes(admin);
   const products = nodes.map((p) => {
