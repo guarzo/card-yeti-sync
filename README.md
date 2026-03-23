@@ -15,7 +15,7 @@
 
 ---
 
-Card Yeti Sync is an embedded Shopify app that syncs your Pokémon card inventory across marketplaces from a single dashboard. eBay integration is live; Whatnot supports CSV export, and Helix integration is planned.
+Card Yeti Sync is an embedded Shopify app that syncs your Pokémon card inventory across marketplaces from a single dashboard. eBay integration is live with shadow mode for safe parallel validation; Whatnot and Helix support CSV export.
 
 <p align="center">
   <img src="docs/dashboard.jpg" alt="Card Yeti Dashboard" width="800" />
@@ -23,11 +23,16 @@ Card Yeti Sync is an embedded Shopify app that syncs your Pokémon card inventor
 
 ## Features
 
-- **One dashboard for all marketplaces** — View products, listing status, and sync activity from Shopify admin (eBay live, Whatnot CSV, Helix planned)
-- **Automatic cross-channel delisting** — When a card sells on one channel, it's delisted on connected marketplaces (eBay live; Whatnot and Helix coming soon)
+- **One dashboard for all marketplaces** — View products, listing status, and sync activity from Shopify admin
+- **Automatic cross-channel delisting** — When a card sells on one channel, it's delisted everywhere else via webhooks
+- **Real-time inventory sync** — Inventory changes trigger immediate delist (qty=0) or relist (qty restored)
 - **Rich card metadata** — 19 custom metafields (set, number, grade, cert, condition, etc.) mapped to each marketplace's native format
-- **Real-time inventory sync** — Webhook-driven updates keep eBay listings accurate as inventory changes
-- **Business policy automation** — eBay listings get shipping, payment, and return policies assigned automatically (solves the Marketplace Connect gap)
+- **Business policy automation** — eBay listings get shipping, payment, and return policies assigned automatically
+- **Shadow mode** — Run alongside Shopify Marketplace Connector to validate sync behavior before cutting over
+- **Sync rules** — Filter which products sync per marketplace by type, tags, price range
+- **CSV exports** — Generate Whatnot and Helix-compatible CSVs with rich descriptions built from card metafields
+- **Price management** — Download/upload price CSVs with automatic 5% Shopify discount calculation
+- **Reconciliation cron** — Periodic inventory drift correction via QStash
 
 ## Supported Marketplaces
 
@@ -35,16 +40,16 @@ Card Yeti Sync is an embedded Shopify app that syncs your Pokémon card inventor
 |:------------|:------------|:-------|
 | **eBay** | Sell API (OAuth + Inventory API) | Active |
 | **Whatnot** | CSV export (API planned) | CSV Ready |
-| **Helix** | Full API sync | Planned |
+| **Helix** | CSV export (API planned) | CSV Ready |
 
 ### eBay
-Direct integration via the Sell Inventory API with OAuth token management and automatic business policy assignment. Reactive token refresh on 401 responses.
+Direct integration via the Sell Inventory API with OAuth token management, automatic business policy assignment, and reactive token refresh. Product create/update webhooks auto-sync listings. Supports shadow mode for parallel validation alongside Marketplace Connector.
 
 ### Whatnot
-Generates Whatnot Seller Hub-compatible CSVs with rich descriptions built from card metafields. Full API integration planned when the Whatnot Seller API exits Developer Preview.
+Generates Whatnot Seller Hub-compatible CSVs with rich descriptions built from card metafields. Shipping profiles auto-detected by product type. Full API integration planned when the Whatnot Seller API exits Developer Preview.
 
 ### Helix
-Integration with the new Pokémon card marketplace featuring 4.9% seller fees and real-time pricing data. Structured data sync with full card metadata. Awaiting API access.
+Generates Helix-compatible CSVs with full card metadata (29 columns). Integration with their real-time pricing data planned when the Seller API opens.
 
 ## Tech Stack
 
@@ -55,7 +60,9 @@ Integration with the new Pokémon card marketplace featuring 4.9% seller fees an
 | **Language** | TypeScript (strict mode) |
 | **Database** | Prisma + PostgreSQL |
 | **Build** | Vite |
+| **Testing** | Vitest |
 | **Hosting** | Fly.io |
+| **CI/CD** | GitHub Actions → Fly Deploy |
 | **Auth** | Shopify managed installation + eBay OAuth |
 
 ## Getting Started
@@ -99,22 +106,49 @@ app/
       BulkApproveModal.tsx           #     Bulk price suggestion review
   routes/
     app._index.tsx                   # Dashboard — 5-zone priority layout
-    app.ebay.tsx                     # eBay — connect account, policies, sync settings
-    app.whatnot.tsx                  # Whatnot — CSV export, inventory breakdown
-    app.helix.tsx                    # Helix — connection, roadmap, inventory readiness
+    app.ebay.tsx                     # eBay — connect, policies, shadow mode, sync settings
+    app.whatnot.tsx                  # Whatnot — CSV export, price management, inventory breakdown
+    app.helix.tsx                    # Helix — CSV export, price management, roadmap
+    app.sync-rules.tsx               # Sync rules — per-marketplace product filters
+    app.privacy.tsx                  # Privacy policy page
     api.ebay-callback.tsx            # eBay OAuth callback
-    webhooks.products.*.tsx          # Product create/update handlers
-    webhooks.orders.create.tsx       # Cross-channel delist on sale
-    webhooks.inventory.*.tsx         # Inventory change propagation
+    api.ebay-notifications.tsx       # eBay marketplace account deletion (GDPR)
+    api.export-whatnot.tsx           # Whatnot CSV download
+    api.export-helix.tsx             # Helix CSV download
+    api.prices.tsx                   # Price CSV download + upload with 5% discount
+    api.product-sync-status.tsx      # Product sync status for admin block extension
+    api.reconcile.tsx                # QStash cron for inventory drift reconciliation
+    webhooks.products.create.tsx     # Auto-list new products on eBay (respects sync rules)
+    webhooks.products.update.tsx     # Auto-update existing eBay listings
+    webhooks.orders.create.tsx       # Cross-channel delist on Shopify sale
+    webhooks.inventory.update.tsx    # Delist on qty=0, relist on qty restored
+    webhooks.app.uninstalled.tsx     # Cleanup all data on uninstall
   lib/
+    adapters/
+      ebay.server.ts                 # eBay Inventory API adapter (list, update, delist, bulk)
+    mappers/
+      ebay-mapper.ts                 # Shopify product → eBay inventory item + offer
+      whatnot-mapper.ts              # Shopify product → Whatnot CSV row
+      helix-mapper.ts                # Shopify product → Helix CSV row
+    csv-utils.ts                     # Shared CSV escape + generation
+    sync-engine.server.ts            # Cross-channel delist/relist orchestration
+    sync-rules.server.ts             # Sync rules evaluation (type, tags, price)
+    shadow-mode.server.ts            # Shadow mode check + eBay state comparison
+    shopify-helpers.server.ts        # Product fetcher + metafield extraction
+    ebay-client.server.ts            # eBay OAuth + API client
+    ebay-policies.server.ts          # eBay business policy CRUD
     marketplace-config.ts            # Shared marketplace constants
     graphql-queries.server.ts        # Shared Shopify GraphQL queries
-    ebay-client.server.ts            # eBay OAuth + API client
     hmac-state.server.ts             # CSRF/OAuth state validation
     ui-helpers.ts                    # Formatting utilities
     use-relative-time.ts             # SSR-safe relative time hook
   db.server.ts                       # Prisma client singleton
   shopify.server.ts                  # Shopify app configuration
+
+extensions/
+  product-sync-status/               # Shopify admin block extension
+    src/BlockExtension.jsx           #   Shows per-marketplace listing status on product page
+    locales/en.default.json          #   Extension translations
 
 prisma/
   schema.prisma                      # Session, MarketplaceAccount, MarketplaceListing,
@@ -129,8 +163,11 @@ MarketplaceAccount ──┐
   marketplace         ├──────── MarketplaceListing
   accessToken         │           shopifyProductId
   refreshToken        │           marketplaceId
-  tokenExpiry         │           status (active|delisted|error|pending)
-  settings (JSON)     │           lastSyncedAt
+  tokenExpiry         │           offerId
+  settings (JSON)     │           status (active|delisted|error|pending)
+    syncRules         │           lastSyncedAt
+    shadowMode        │           errorMessage
+    policyIds         │
                       │
 SyncLog               │
   marketplace         │
@@ -145,34 +182,77 @@ SyncLog               │
 
 Products in Shopify use custom metafields under the `card` namespace (19 fields covering card identity, grading, condition, and commerce data). These are mapped to each marketplace's native format by the adapter layer.
 
+## Shadow Mode
+
+Shadow mode lets you run Card Yeti alongside Shopify Marketplace Connector to validate that sync behavior is correct before cutting over.
+
+When enabled (per-shop toggle on the eBay settings page):
+- All eBay write operations are intercepted — no listings created, updated, or delisted
+- Each intended action is logged with what Card Yeti *would* have done
+- eBay's actual state is read and compared against the intended action
+- Matches and discrepancies are shown on the eBay settings page
+
+Everything else remains fully functional: dashboard, CSV exports, price management, sync rules.
+
+### Cutover workflow
+
+1. Connect eBay account in Card Yeti
+2. Enable shadow mode on the eBay settings page
+3. Monitor the shadow activity log for match rate
+4. When confident, disable shadow mode and remove Marketplace Connector
+
 ## Deployment
 
-```bash
-# Build for production
-npm run build
+### CI/CD Pipeline
 
-# Deploy to Fly.io
+Merging to `main` triggers:
+1. **CI** (GitHub Actions) — type check, lint, Prisma validation, migration drift check, tests, build
+2. **Fly Deploy** — automatic deployment after CI passes
+
+Shopify app config + extensions are deployed separately:
+```bash
+shopify app deploy
+```
+Only needed when `shopify.app.toml` or `extensions/` change.
+
+### Manual deployment
+
+```bash
+# Deploy server to Fly.io
 fly deploy
 
+# Deploy Shopify app config + extensions
+shopify app deploy
+
 # Local db proxy
-fly proxy 15432:5432 -a correct-name
+fly proxy 15432:5432 -a card-yeti-sync-db
 ```
 
 ### Environment Variables
 
-Set automatically by Shopify CLI during development. For production, configure on Fly.io:
+Set automatically by Shopify CLI during development. For production, configure via `fly secrets set`:
 
 | Variable | Description |
 |:---------|:------------|
 | `SHOPIFY_API_KEY` | App API key from Shopify Partners |
 | `SHOPIFY_API_SECRET` | App API secret |
-| `SHOPIFY_APP_URL` | Production app URL |
+| `SHOPIFY_APP_URL` | Production app URL (e.g. `https://card-yeti-sync.fly.dev`) |
 | `EBAY_CLIENT_ID` | eBay developer app ID |
 | `EBAY_CLIENT_SECRET` | eBay developer app secret |
-| `EBAY_RU_NAME` | eBay redirect URL name |
+| `EBAY_RU_NAME` | eBay redirect URL name (RuName) |
 | `EBAY_ENVIRONMENT` | `sandbox` or `production` |
+| `EBAY_VERIFICATION_TOKEN` | Token for eBay notification endpoint validation |
+| `EBAY_NOTIFICATION_ENDPOINT` | Full URL for eBay notification endpoint |
 | `DATABASE_URL` | PostgreSQL connection string |
-| `NODE_ENV` | `production` |
+| `QSTASH_SECRET` | Bearer token for reconciliation cron (optional) |
+
+### eBay Developer Portal Setup
+
+| Setting | Value |
+|:--------|:------|
+| **OAuth Accept URL** | `https://card-yeti-sync.fly.dev/api/ebay-callback` |
+| **OAuth Decline URL** | `https://card-yeti-sync.fly.dev/app/ebay?error=oauth_denied` |
+| **Notification Endpoint** | `https://card-yeti-sync.fly.dev/api/ebay-notifications` |
 
 ## Scripts
 
