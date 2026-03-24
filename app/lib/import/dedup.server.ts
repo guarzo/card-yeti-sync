@@ -57,8 +57,22 @@ interface ExistingProduct {
   condition: string | null;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function parseProductNode(node: any): ExistingProduct {
+/** Shape of the GraphQL product node returned by PRODUCT_COMPARE_FIELDS. */
+interface ProductCompareNode {
+  id: string;
+  title?: string;
+  variants?: { edges?: Array<{ node?: { price?: string } }> };
+  ebayItemId?: { value?: string };
+  pokemon?: { value?: string };
+  setName?: { value?: string };
+  number?: { value?: string };
+  gradingCompany?: { value?: string };
+  grade?: { value?: string };
+  certNumber?: { value?: string };
+  condition?: { value?: string };
+}
+
+function parseProductNode(node: ProductCompareNode): ExistingProduct {
   return {
     id: node.id,
     title: node.title ?? "",
@@ -147,7 +161,7 @@ export async function checkDuplicates(
         variables: { query: queryParts.join(" OR ") },
       });
       const data = await res.json();
-      const edges = data.data?.products?.edges ?? [];
+      const edges: Array<{ node: ProductCompareNode }> = data.data?.products?.edges ?? [];
 
       // Build a map of found eBay IDs → existing product data
       const foundProducts = new Map<string, ExistingProduct>();
@@ -205,7 +219,7 @@ export async function checkDuplicates(
       const data = await res.json();
 
       for (const entry of handleEntries) {
-        const result = data.data?.[`h${entry.index}`];
+        const result = data.data?.[`h${entry.index}`] as ProductCompareNode | undefined;
         if (result) {
           const existing = parseProductNode(result);
           entry.card.isDuplicate = true;
