@@ -150,10 +150,18 @@ export function ProductsSyncTable({
                 {pendingPriceReviews > 0 && (
                   <s-table-cell>
                     {suggestion ? (
-                      <s-stack direction="inline" gap="small" alignItems="center">
-                        <s-badge tone="success">
-                          ${suggestion.suggestedPrice}
-                        </s-badge>
+                      <s-stack direction="block" gap="small" alignItems="start">
+                        <s-stack direction="inline" gap="small" alignItems="center">
+                          <s-badge tone="success">
+                            ${suggestion.suggestedPrice}
+                          </s-badge>
+                          <s-text color="subdued">
+                            {(() => {
+                              const delta = parseFloat(suggestion.suggestedPrice) - parseFloat(suggestion.currentPrice);
+                              return `${delta > 0 ? "+" : ""}${delta.toFixed(2)}`;
+                            })()}
+                          </s-text>
+                        </s-stack>
                         <ApproveButton suggestionId={suggestion.id} />
                       </s-stack>
                     ) : (

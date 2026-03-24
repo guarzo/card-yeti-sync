@@ -17,28 +17,42 @@ export function AttentionZone({
     .filter(([, m]) => m.errorCount > 0)
     .map(([name]) => MARKETPLACE_CONFIG[name as MarketplaceKey]?.href ?? `/app/${name}`)[0];
 
-  const expiringTokens = useMemo(() => {
+  const { expiredTokens, expiringTokens } = useMemo(() => {
     // eslint-disable-next-line react-hooks/purity -- Date.now() drift is irrelevant for a 7-day threshold
     const now = Date.now();
-    return Object.entries(marketplaces)
-      .filter(([, m]) => {
-        if (!m.tokenExpiry) return false;
-        const daysUntilExpiry = (new Date(m.tokenExpiry).getTime() - now) / (1000 * 60 * 60 * 24);
-        return daysUntilExpiry < 7;
-      })
-      .map(([name]) => ({
+    const expired: { name: string; label: string; href: string }[] = [];
+    const expiring: { name: string; label: string; href: string }[] = [];
+    for (const [name, m] of Object.entries(marketplaces)) {
+      if (!m.tokenExpiry) continue;
+      const daysUntilExpiry = (new Date(m.tokenExpiry).getTime() - now) / (1000 * 60 * 60 * 24);
+      const entry = {
         name,
         label: MARKETPLACE_CONFIG[name as MarketplaceKey]?.label ?? name,
         href: MARKETPLACE_CONFIG[name as MarketplaceKey]?.href ?? `/app/${name}`,
-      }));
+      };
+      if (daysUntilExpiry < 0) {
+        expired.push(entry);
+      } else if (daysUntilExpiry < 7) {
+        expiring.push(entry);
+      }
+    }
+    return { expiredTokens: expired, expiringTokens: expiring };
   }, [marketplaces]);
 
-  const hasBanners = totalErrors > 0 || pendingPriceReviews > 0 || expiringTokens.length > 0;
+  const hasBanners =
+    totalErrors > 0 || pendingPriceReviews > 0 || expiredTokens.length > 0 || expiringTokens.length > 0;
 
   if (!hasBanners) return null;
 
   return (
     <>
+      {expiredTokens.map(({ name, label, href }) => (
+        <s-banner key={name} tone="critical" dismissible>
+          {label} token has expired.{" "}
+          <s-link href={href}>Reconnect →</s-link>
+        </s-banner>
+      ))}
+
       {expiringTokens.map(({ name, label, href }) => (
         <s-banner key={name} tone="warning" dismissible>
           {label} token expires soon.{" "}

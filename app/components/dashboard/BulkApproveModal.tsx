@@ -142,10 +142,23 @@ export function BulkApproveModal({
                 />
                 <s-stack direction="block" gap="small">
                   <s-text type="strong">{s.productTitle ?? s.shopifyProductId}</s-text>
-                  <s-text color="subdued">
-                    ${s.currentPrice} → ${s.suggestedPrice}
-                    {s.reason && ` · ${s.reason}`}
-                  </s-text>
+                  <s-stack direction="inline" gap="small" alignItems="center">
+                    <s-text color="subdued">
+                      ${s.currentPrice} → ${s.suggestedPrice}
+                    </s-text>
+                    {(() => {
+                      const current = parseFloat(s.currentPrice);
+                      const suggested = parseFloat(s.suggestedPrice);
+                      if (!current) return null;
+                      const pct = Math.round(((suggested - current) / current) * 100);
+                      return (
+                        <s-badge tone={pct < 0 ? "critical" : "success"}>
+                          {pct > 0 ? "+" : ""}{pct}%
+                        </s-badge>
+                      );
+                    })()}
+                    {s.reason && <s-text color="subdued">· {s.reason}</s-text>}
+                  </s-stack>
                 </s-stack>
               </s-stack>
             ))}

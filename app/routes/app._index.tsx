@@ -52,7 +52,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const afterCursor = url.searchParams.get("after") ?? null;
 
   // Phase 1: Run independent queries in parallel
-  const [graphqlResponse, accounts, statusCounts, recentLogs, pendingSuggestions, totalProductsWithListings] =
+  const [graphqlResponse, accounts, statusCounts, recentLogs, pendingSuggestions, totalProductsWithListings, lastPriceFetch] =
     await Promise.all([
       admin.graphql(
         `#graphql
@@ -97,6 +97,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       db.marketplaceListing.groupBy({
         by: ["shopifyProductId"],
         where: { shopId: shop },
+      }),
+      db.syncLog.findFirst({
+        where: { shopId: shop, marketplace: "helix", action: "price_fetch" },
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true },
       }),
     ]);
 
@@ -202,9 +207,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     });
   }
 
-  // Build price suggestions map (keyed by product ID)
+  // Build price suggestions map (keyed by product ID), filtering out same-price suggestions
   const priceSuggestions: Record<string, PriceSuggestion> = {};
   for (const s of pendingSuggestions) {
+    if (s.suggestedPrice.toNumber() === s.currentPrice.toNumber()) continue;
     priceSuggestions[s.shopifyProductId] = {
       id: s.id,
       shopifyProductId: s.shopifyProductId,
@@ -277,13 +283,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     };
   });
 
-  // Smart pricing metadata
-  const lastPriceFetch = await db.syncLog.findFirst({
-    where: { shopId: shop, marketplace: "helix", action: "price_fetch" },
-    orderBy: { createdAt: "desc" },
-    select: { createdAt: true },
-  });
-
   return {
     products: filteredProducts,
     productCount,
@@ -292,7 +291,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     recentLogs: parsedLogs,
     listingsByProduct,
     priceSuggestions,
-    pendingPriceReviews: pendingSuggestions.length,
+    pendingPriceReviews: Object.keys(priceSuggestions).length,
     connectedMarketplaces,
     productsAwaitingSync,
     totalActiveListings,
@@ -382,10 +381,12 @@ export default function Dashboard() {
 
   const fetchPricesFetcher = useFetcher();
   const isFetchingPrices = fetchPricesFetcher.state === "submitting";
-  const fetchResult = (fetchPricesFetcher.data as Record<string, unknown>)?.fetchResult as
-    | { created: number; updated: number; notFound: number; total: number }
-    | undefined;
-  const fetchError = (fetchPricesFetcher.data as Record<string, unknown>)?.error as string | undefined;
+  type FetchPricesResponse =
+    | { fetchResult: { created: number; updated: number; notFound: number; total: number } }
+    | { error: string };
+  const fetchPricesData = fetchPricesFetcher.data as FetchPricesResponse | undefined;
+  const fetchResult = fetchPricesData && "fetchResult" in fetchPricesData ? fetchPricesData.fetchResult : undefined;
+  const fetchError = fetchPricesData && "error" in fetchPricesData ? fetchPricesData.error : undefined;
 
   // Build suggestions list with product titles for the modal
   const suggestionsWithTitles = Object.values(priceSuggestions).map((s) => ({

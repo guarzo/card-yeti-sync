@@ -42,7 +42,9 @@ export function MarketplaceTile({
               Last export: <RelativeTime date={lastExportDate} />
             </span>
           )}
-          <s-button>{ctaLabel ?? `Set up ${name}`}</s-button>
+          <span style={{ fontWeight: 600, color: "var(--s-color-text-interactive)" }}>
+            {ctaLabel ?? `Set up ${name}`} →
+          </span>
         </s-stack>
       </s-box>
     );

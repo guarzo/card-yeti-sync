@@ -17,36 +17,78 @@ import { generateHelixCSV } from "../lib/mappers/helix-mapper";
 import { downloadCSV } from "../lib/csv-download";
 import { generatePricesCSV } from "./api.prices";
 
+interface ExportHistoryEntry {
+  createdAt: string;
+  mode: string;
+  productCount: number;
+}
+
 interface LoaderData {
   gradedCount: number;
   lastExportDate: string | null;
+  productTypes: Array<{ type: string; count: number }>;
+  recentExports: ExportHistoryEntry[];
 }
 
 export const meta: MetaFunction = () => [{ title: "Helix | Card Yeti Sync" }];
+
+function isExportableType(type: string): boolean {
+  const lower = type.toLowerCase();
+  return lower.includes("graded") || lower.includes("slab");
+}
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
   const shop = session.shop;
 
-  const { typeCounts } = await fetchProductTypeCounts(admin);
+  const [productData, lastExport, recentExportLogs] = await Promise.all([
+    fetchProductTypeCounts(admin),
+    db.syncLog.findFirst({
+      where: { shopId: shop, marketplace: "helix", action: "list" },
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true, details: true },
+    }),
+    db.syncLog.findMany({
+      where: { shopId: shop, marketplace: "helix", action: "list" },
+      orderBy: { createdAt: "desc" },
+      take: 5,
+      select: { createdAt: true, details: true },
+    }),
+  ]);
+
+  const { typeCounts } = productData;
 
   let gradedCount = 0;
   for (const { type, count } of typeCounts) {
-    const lower = type.toLowerCase();
-    if (lower.includes("graded") || lower.includes("slab")) {
+    if (isExportableType(type)) {
       gradedCount += count;
     }
   }
 
-  const lastExport = await db.syncLog.findFirst({
-    where: { shopId: shop, marketplace: "helix", action: "list" },
-    orderBy: { createdAt: "desc" },
-    select: { createdAt: true, details: true },
+  const recentExports: ExportHistoryEntry[] = recentExportLogs.map((log) => {
+    let mode = "all";
+    let exportProductCount = 0;
+    if (log.details) {
+      try {
+        const parsed = JSON.parse(log.details);
+        mode = parsed.mode ?? "all";
+        exportProductCount = parsed.productCount ?? 0;
+      } catch {
+        // ignore
+      }
+    }
+    return {
+      createdAt: log.createdAt.toISOString(),
+      mode,
+      productCount: exportProductCount,
+    };
   });
 
   return {
     gradedCount,
     lastExportDate: lastExport?.createdAt?.toISOString() ?? null,
+    productTypes: typeCounts,
+    recentExports,
   } satisfies LoaderData;
 };
 
@@ -87,6 +129,26 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     const csv = generateHelixCSV(csvData);
 
+    // Ensure a MarketplaceAccount exists for helix (CSV-only, no real token)
+    await db.marketplaceAccount.upsert({
+      where: { shopId_marketplace: { shopId: shop, marketplace: "helix" } },
+      update: {},
+      create: { shopId: shop, marketplace: "helix", accessToken: "csv-export-only" },
+    });
+
+    // Persist exported product IDs so "Export New Only" excludes them next time
+    if (csvData.length > 0) {
+      await db.marketplaceListing.createMany({
+        data: csvData.map((p) => ({
+          shopId: shop,
+          shopifyProductId: p.product.id,
+          marketplace: "helix",
+          status: "active",
+        })),
+        skipDuplicates: true,
+      });
+    }
+
     await db.syncLog.create({
       data: {
         shopId: shop,
@@ -114,26 +176,29 @@ export default function HelixSettings() {
   const {
     gradedCount,
     lastExportDate,
+    productTypes,
+    recentExports,
   } = useLoaderData<typeof loader>();
 
-  const exportAllFetcher = useFetcher({ key: "export-all" });
-  const exportNewFetcher = useFetcher({ key: "export-new" });
-  const pricesFetcher = useFetcher({ key: "download-prices" });
+  const exportAllFetcher = useFetcher({ key: "helix-export-all" });
+  const exportNewFetcher = useFetcher({ key: "helix-export-new" });
+  const pricesFetcher = useFetcher({ key: "helix-download-prices" });
   const isExporting =
     exportAllFetcher.state === "submitting" ||
     exportNewFetcher.state === "submitting" ||
     pricesFetcher.state === "submitting";
 
+  const exportAllResult = exportAllFetcher.data as { csv?: string; filename?: string; productCount?: number } | null;
+  const exportNewResult = exportNewFetcher.data as { csv?: string; filename?: string; productCount?: number } | null;
+
   // Trigger CSV download when each export action completes
   useEffect(() => {
-    const data = exportAllFetcher.data as { csv?: string; filename?: string } | null;
-    if (data?.csv && data?.filename) downloadCSV(data.csv, data.filename);
-  }, [exportAllFetcher.data]);
+    if (exportAllResult?.csv && exportAllResult?.filename) downloadCSV(exportAllResult.csv, exportAllResult.filename);
+  }, [exportAllResult]);
 
   useEffect(() => {
-    const data = exportNewFetcher.data as { csv?: string; filename?: string } | null;
-    if (data?.csv && data?.filename) downloadCSV(data.csv, data.filename);
-  }, [exportNewFetcher.data]);
+    if (exportNewResult?.csv && exportNewResult?.filename) downloadCSV(exportNewResult.csv, exportNewResult.filename);
+  }, [exportNewResult]);
 
   useEffect(() => {
     const data = pricesFetcher.data as { csv?: string; filename?: string } | null;
@@ -142,65 +207,166 @@ export default function HelixSettings() {
 
   return (
     <s-page heading="Helix">
-      <s-section heading="Export">
-        <s-paragraph color="subdued">
-          Generate Helix-compatible CSVs for bulk upload.
-        </s-paragraph>
+      {/* Success banners */}
+      {exportAllResult?.productCount != null && (
+        <s-banner tone="success" dismissible>
+          Exported {exportAllResult.productCount} products to CSV.
+        </s-banner>
+      )}
+      {exportNewResult?.productCount != null && (
+        <s-banner tone="success" dismissible>
+          Exported {exportNewResult.productCount} new products to CSV.
+        </s-banner>
+      )}
 
+      {/* Section 1: Overview */}
+      <s-section heading="Overview">
+        <s-grid gridTemplateColumns="repeat(auto-fit, minmax(140px, 1fr))" gap="base">
+          <s-grid-item>
+            <StatCard
+              label="Exportable Products"
+              value={gradedCount}
+              tone="success"
+              description="Graded cards & slabs"
+            />
+          </s-grid-item>
+          <s-grid-item>
+            <StatCard
+              label="Product Types"
+              value={productTypes.length}
+              tone="info"
+            />
+          </s-grid-item>
+          <s-grid-item>
+            <StatCard
+              label="Last Export"
+              value={
+                lastExportDate ? (
+                  <RelativeTime date={lastExportDate} />
+                ) : (
+                  "Never"
+                )
+              }
+            />
+          </s-grid-item>
+        </s-grid>
+      </s-section>
+
+      {/* Section 2: Product Breakdown */}
+      <s-section heading="Product Breakdown">
+        <s-paragraph color="subdued">
+          Product types in your Shopify store. Types containing &quot;Graded&quot; or &quot;Slab&quot; are included in Helix exports.
+        </s-paragraph>
+        {productTypes.length === 0 ? (
+          <s-box padding="large">
+            <s-text color="subdued">No products found. Import or create products in Shopify to get started.</s-text>
+          </s-box>
+        ) : (
+          <s-table>
+            <s-table-header-row>
+              <s-table-header>Type</s-table-header>
+              <s-table-header>Count</s-table-header>
+              <s-table-header>Exportable</s-table-header>
+            </s-table-header-row>
+            <s-table-body>
+              {productTypes.map(({ type, count }) => (
+                <s-table-row key={type}>
+                  <s-table-cell>
+                    <s-text type="strong">{type}</s-text>
+                  </s-table-cell>
+                  <s-table-cell>{count}</s-table-cell>
+                  <s-table-cell>
+                    <s-badge tone={isExportableType(type) ? "success" : undefined}>
+                      {isExportableType(type) ? "Yes" : "No"}
+                    </s-badge>
+                  </s-table-cell>
+                </s-table-row>
+              ))}
+            </s-table-body>
+          </s-table>
+        )}
+      </s-section>
+
+      {/* Section 3: Export */}
+      <s-section heading="Export">
         <s-box padding="base" borderWidth="base" borderRadius="base">
           <s-stack direction="block" gap="base">
-            <s-grid gridTemplateColumns="repeat(auto-fit, minmax(140px, 1fr))" gap="base">
-              <s-grid-item>
-                <StatCard
-                  label="Exportable Products"
-                  value={gradedCount}
-                  description="Graded cards with inventory"
-                />
-              </s-grid-item>
-              <s-grid-item>
-                <StatCard
-                  label="Last Export"
-                  value={
-                    lastExportDate ? (
-                      <RelativeTime date={lastExportDate} />
-                    ) : (
-                      "Never"
-                    )
-                  }
-                />
-              </s-grid-item>
-            </s-grid>
-
-            <s-divider />
-
-            <s-stack direction="inline" gap="base" alignItems="center">
+            <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
+              <s-stack direction="block" gap="small">
+                <s-text type="strong">Export All Products</s-text>
+                <s-text color="subdued">Full Helix-compatible CSV of all graded products.</s-text>
+              </s-stack>
               <exportAllFetcher.Form method="post">
                 <input type="hidden" name="intent" value="export-csv" />
                 <input type="hidden" name="mode" value="all" />
                 <s-button variant="primary" type="submit" disabled={isExporting || undefined}>
-                  {isExporting ? "Exporting..." : "Export All Products"}
+                  {exportAllFetcher.state === "submitting" ? "Exporting..." : "Export All"}
                 </s-button>
               </exportAllFetcher.Form>
+            </s-stack>
+
+            <s-divider />
+
+            <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
+              <s-stack direction="block" gap="small">
+                <s-text type="strong">Export New Only</s-text>
+                <s-text color="subdued">Products not previously exported to Helix.</s-text>
+              </s-stack>
               <exportNewFetcher.Form method="post">
                 <input type="hidden" name="intent" value="export-csv" />
                 <input type="hidden" name="mode" value="new" />
                 <s-button type="submit" disabled={isExporting || undefined}>
-                  {isExporting ? "Exporting..." : "Export New Only"}
+                  {exportNewFetcher.state === "submitting" ? "Exporting..." : "Export New"}
                 </s-button>
               </exportNewFetcher.Form>
+            </s-stack>
+
+            <s-divider />
+
+            <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
+              <s-stack direction="block" gap="small">
+                <s-text type="strong">Download Prices</s-text>
+                <s-text color="subdued">Price list CSV for all active products.</s-text>
+              </s-stack>
               <pricesFetcher.Form method="post">
                 <input type="hidden" name="intent" value="download-prices" />
                 <s-button type="submit" disabled={isExporting || undefined}>
-                  Download Prices
+                  {pricesFetcher.state === "submitting" ? "Downloading..." : "Download"}
                 </s-button>
               </pricesFetcher.Form>
             </s-stack>
-
-            <s-text color="subdued">
-              Product exports include category, title, description (from card metafields), price, shipping, and images.
-            </s-text>
           </s-stack>
         </s-box>
+      </s-section>
+
+      {/* Section 4: Export History */}
+      <s-section heading="Export History">
+        {recentExports.length === 0 ? (
+          <s-box padding="large">
+            <s-text color="subdued">No exports yet. Use the buttons above to generate your first CSV.</s-text>
+          </s-box>
+        ) : (
+          <s-table>
+            <s-table-header-row>
+              <s-table-header>Date</s-table-header>
+              <s-table-header>Type</s-table-header>
+              <s-table-header>Products</s-table-header>
+            </s-table-header-row>
+            <s-table-body>
+              {recentExports.map((exp, i) => (
+                <s-table-row key={i}>
+                  <s-table-cell>
+                    <RelativeTime date={exp.createdAt} />
+                  </s-table-cell>
+                  <s-table-cell>
+                    <s-badge>{exp.mode === "new" ? "New Only" : "Full Export"}</s-badge>
+                  </s-table-cell>
+                  <s-table-cell>{exp.productCount}</s-table-cell>
+                </s-table-row>
+              ))}
+            </s-table-body>
+          </s-table>
+        )}
       </s-section>
 
     </s-page>

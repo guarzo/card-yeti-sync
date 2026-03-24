@@ -309,7 +309,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (intent === "toggle-shadow") {
     const currentSettings = (account.settings ?? {}) as Record<string, unknown>;
-    const newShadowMode = currentSettings.shadowMode === false;
+    const newShadowMode = !(currentSettings.shadowMode ?? false);
     await db.marketplaceAccount.update({
       where: { id: account.id },
       data: {
@@ -608,10 +608,10 @@ export default function EbaySettings() {
             Select the eBay business policies to use for new listings.
             These are read from your eBay seller account.
           </s-paragraph>
-          {policies.fulfillment.length === 0 && policies.payment.length === 0 && policies.return.length === 0 ? (
+          {policies.fulfillment.length === 0 || policies.payment.length === 0 || policies.return.length === 0 ? (
             <s-banner tone="warning">
-              No business policies found on your eBay account. Create policies in
-              eBay Seller Hub before listing products.
+              One or more business policies are missing from your eBay account. Create
+              fulfillment, payment, and return policies in eBay Seller Hub before listing products.
             </s-banner>
           ) : (
             <Form method="post">
@@ -619,8 +619,8 @@ export default function EbaySettings() {
               <s-stack direction="block" gap="base">
                 <s-box padding="base" borderWidth="base" borderRadius="base">
                   <s-stack direction="block" gap="small">
-                    <s-text type="strong">Fulfillment Policy</s-text>
-                    <select name="fulfillmentPolicyId" defaultValue={selectedPolicies.fulfillmentPolicyId || ""} style={{ width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #ccc" }}>
+                    <label htmlFor="fulfillmentPolicyIdSelect"><s-text type="strong">Fulfillment Policy</s-text></label>
+                    <select id="fulfillmentPolicyIdSelect" name="fulfillmentPolicyId" defaultValue={selectedPolicies.fulfillmentPolicyId || ""} style={{ width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #ccc" }}>
                       <option value="">— Select —</option>
                       {policies.fulfillment.map((p) => (
                         <option key={p.id} value={p.id}>
@@ -632,8 +632,8 @@ export default function EbaySettings() {
                 </s-box>
                 <s-box padding="base" borderWidth="base" borderRadius="base">
                   <s-stack direction="block" gap="small">
-                    <s-text type="strong">Payment Policy</s-text>
-                    <select name="paymentPolicyId" defaultValue={selectedPolicies.paymentPolicyId || ""} style={{ width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #ccc" }}>
+                    <label htmlFor="paymentPolicyIdSelect"><s-text type="strong">Payment Policy</s-text></label>
+                    <select id="paymentPolicyIdSelect" name="paymentPolicyId" defaultValue={selectedPolicies.paymentPolicyId || ""} style={{ width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #ccc" }}>
                       <option value="">— Select —</option>
                       {policies.payment.map((p) => (
                         <option key={p.id} value={p.id}>
@@ -645,8 +645,8 @@ export default function EbaySettings() {
                 </s-box>
                 <s-box padding="base" borderWidth="base" borderRadius="base">
                   <s-stack direction="block" gap="small">
-                    <s-text type="strong">Return Policy</s-text>
-                    <select name="returnPolicyId" defaultValue={selectedPolicies.returnPolicyId || ""} style={{ width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #ccc" }}>
+                    <label htmlFor="returnPolicyIdSelect"><s-text type="strong">Return Policy</s-text></label>
+                    <select id="returnPolicyIdSelect" name="returnPolicyId" defaultValue={selectedPolicies.returnPolicyId || ""} style={{ width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #ccc" }}>
                       <option value="">— Select —</option>
                       {policies.return.map((p) => (
                         <option key={p.id} value={p.id}>

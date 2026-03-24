@@ -48,8 +48,8 @@ Card Yeti Sync has been deployed to the production Shopify store. This test plan
      - Pending count (shadow-created listings show as "pending")
      - Delisted count
      - Errors count
-     - Token Expires
-   - **Expected:** All values render as numbers or "0", no errors
+     - Status badge (shows "Connected")
+   - **Expected:** All values render as numbers or "0", Status shows a green "Connected" badge, no errors
 
 ### Pass Criteria
 - Yellow "Shadow Mode Active" banner is visible
@@ -78,21 +78,20 @@ Card Yeti Sync has been deployed to the production Shopify store. This test plan
 4. **Verify connection card updates**
    - Connection card should now show:
      - Active/Pending/Delisted/Error listing counts
-     - Token Expires showing days until expiry (should be ~90 days)
+     - Status badge showing "Connected"
    - **Expected:** All fields populated, no "Unknown" or error states
 
 5. **Verify Business Policies** (scroll down)
-   - The Business Policies section should show:
-     - Fulfillment policy (USPS shipping, 1-day handling)
-     - Payment policy (immediate payment)
-     - Return policy (30-day returns)
-   - **Expected:** Policies are displayed (auto-created on first connect)
+   - The Business Policies section reads existing policies from your eBay seller account
+   - If policies exist: dropdowns for Fulfillment, Payment, and Return policies are shown
+   - If one or more policies are missing: a warning banner appears stating policies must be created in eBay Seller Hub
+   - **Expected:** Policies are displayed if they exist on eBay, or warning banner is shown (no auto-creation occurs)
 
 ### Steps (if already connected)
 
 1. **Verify connected state**
    - Connection card shows stats and a "Disconnect" button
-   - Token expiry shows reasonable days remaining
+   - Status badge shows "Connected"
    - **Expected:** Connected state is clear and stats render
 
 ### Pass Criteria
@@ -208,45 +207,43 @@ Card Yeti Sync has been deployed to the production Shopify store. This test plan
 
 1. **Navigate to Helix page**
    - Card Yeti Sync → Helix (sidebar navigation)
-   - **Expected:** Page loads with connection card, CSV Export section, and inventory readiness
+   - **Expected:** Page loads with Export section, stat cards (Exportable Products, Last Export), and export buttons
 
 2. **Check page elements**
-   - Connection card shows connection status and active listings count
-   - Inventory Readiness shows Total Products, Graded Cards, Raw Singles
+   - Exportable Products shows count of graded cards
+   - Last Export shows date or "Never"
    - **Expected:** Values render correctly
 
 3. **Click "Export All Products"**
    - **Expected:** Browser downloads `helix-export-YYYY-MM-DD.csv`
 
 4. **Open and validate the CSV**
-   - Check headers match expected 29 columns:
+   - Check headers match the 14-column TCGPlayer-style format:
      ```csv
-     Title, Description, Price (cents), Listing Type, Condition, Quantity,
-     Image URL 1-4,
-     Pokémon, Set Name, Card Number, Language, Year, Rarity,
-     Grading Company, Grade, Cert Number, Cert URL,
-     Population, Pop Higher, Subgrades,
-     Raw Condition, Centering, Condition Notes,
-     Shopify Product ID, eBay Item ID, SKU
+     TCGplayer Id, Product Line, Set Name, Product Name, Title, Number,
+     Rarity, Condition, TCG Market Price, TCG Direct Low,
+     TCG Low Price With Shipping, TCG Marketplace Price,
+     Add to Quantity, Total Quantity
      ```
    - Verify sample rows:
-     - **Price** is in **cents** (e.g., 4999 for $49.99)
-     - **Listing Type** = "fixed_price"
-     - **Condition** = "graded" / "raw" / "sealed" (auto-detected)
-     - **Card metadata** columns (Pokemon, Set Name, Grade, etc.) populated from metafields
-     - **Shopify Product ID** is present for cross-referencing
-     - **Images** up to 4 URLs
-   - **Expected:** All 29 columns present, metadata-rich rows
+     - **TCGplayer Id** = Shopify numeric product ID (used for cross-referencing)
+     - **Product Line** = "Pokemon"
+     - **Set Name** and **Product Name** populated from card metafields
+     - **Title** = descriptive title built from pokemon, set, number, and grade
+     - **Condition** = TCG condition mapped from grade (Near Mint / Lightly Played / etc.)
+     - **TCG Market Price** and **TCG Marketplace Price** = dollar amount (e.g., "49.99")
+     - **Add to Quantity** and **Total Quantity** = actual inventory count
+   - **Expected:** All 14 columns present, card metadata populated correctly
 
 5. **Test "Export New Only"**
    - Click "Export New Only"
-   - **Expected:** Filters to only un-exported products
+   - **Expected:** Filters to only un-exported products (products not in a previous export)
 
 ### Pass Criteria
 - CSV downloads successfully
-- 29-column format with prices in cents
-- Rich card metadata (grading, population, cert URL) populated
-- Cross-reference IDs (Shopify Product ID, eBay Item ID) present
+- 14-column TCGPlayer-style format with prices in dollars
+- Card metadata (set name, number, rarity, condition) populated from metafields
+- TCGplayer Id column contains Shopify product IDs for cross-referencing
 
 ---
 
@@ -358,7 +355,7 @@ Import creates **real Shopify products**. If you want to avoid creating products
 | 5 | Shadow activity logs captured after product edit/create | |
 | 6 | No actual eBay listings created (verified on eBay) | |
 | 7 | Whatnot CSV exports with correct 21-column format | |
-| 8 | Helix CSV exports with correct 29-column format (prices in cents) | |
+| 8 | Helix CSV exports with correct 14-column TCGPlayer format (prices in dollars) | |
 | 9 | Import CSV parse works and review table displays | |
 | 10 | Import eBay item ID fetch works | |
 | 11 | Dashboard renders correctly with production data | |

@@ -46,9 +46,9 @@ export function WelcomeHero({ productCount }: WelcomeHeroProps) {
                     <s-paragraph color="subdued">
                       {MARKETPLACE_DESCRIPTIONS[key]}
                     </s-paragraph>
-                    <s-button variant={i === 0 ? "primary" : undefined}>
-                      {config.ctaLabel}
-                    </s-button>
+                    <span style={{ fontWeight: 600, color: i === 0 ? "var(--s-color-text-interactive)" : "var(--s-color-text-subdued)" }}>
+                      {config.ctaLabel} →
+                    </span>
                   </s-stack>
                 </s-box>
               </Link>

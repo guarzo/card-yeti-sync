@@ -50,7 +50,7 @@ export function mapToHelixRow(
   variant: { price: string; compareAtPrice: string | null; sku: string; inventoryQuantity: number },
 ): string[] {
   const price = variant.compareAtPrice ?? variant.price ?? "0.00";
-  const quantity = variant.inventoryQuantity > 0 ? variant.inventoryQuantity : 1;
+  const quantity = variant.inventoryQuantity;
 
   // Build a descriptive title: "Pokemon - Set Name #Number Grade"
   const titleParts: string[] = [];
