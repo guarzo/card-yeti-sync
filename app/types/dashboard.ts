@@ -62,4 +62,6 @@ export interface LoaderData {
   totalErrors: number;
   hasNextPage: boolean;
   endCursor: string | null;
+  pricingApiConfigured: boolean;
+  lastPriceFetchDate: string | null;
 }

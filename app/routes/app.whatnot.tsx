@@ -144,7 +144,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 const SUPPORTED_TYPES = ["Graded Card", "Graded Slab"];
 
 export default function WhatnotSettings() {
-  const { lastExportDate, lastPriceUpdateDate, productTypes } =
+  const { lastExportDate, productTypes } =
     useLoaderData<typeof loader>();
   const exportFetcher = useFetcher();
   const isExporting = exportFetcher.state === "submitting";
@@ -163,16 +163,14 @@ export default function WhatnotSettings() {
 
   return (
     <s-page heading="Whatnot">
-      {/* CSV Export */}
-      <s-section heading="CSV Export">
+      <s-section heading="Export">
         <s-paragraph color="subdued">
           Generate Whatnot-compatible CSVs for bulk upload to Seller Hub.
-          Includes rich descriptions built from your card metafields.
         </s-paragraph>
 
         <s-box padding="base" borderWidth="base" borderRadius="base">
           <s-stack direction="block" gap="base">
-            <s-grid gap="base">
+            <s-grid gridTemplateColumns="repeat(auto-fit, minmax(140px, 1fr))" gap="base">
               <s-grid-item>
                 <StatCard
                   label="Exportable Products"
@@ -191,9 +189,6 @@ export default function WhatnotSettings() {
                     )
                   }
                 />
-              </s-grid-item>
-              <s-grid-item>
-                <StatCard label="Format" value="Whatnot Seller Hub CSV" />
               </s-grid-item>
             </s-grid>
 
@@ -214,41 +209,17 @@ export default function WhatnotSettings() {
                   {isExporting ? "Exporting..." : "Export New Only"}
                 </s-button>
               </exportFetcher.Form>
-            </s-stack>
-
-            <s-text color="subdued">
-              Exports include category, title, description (from card metafields), price, shipping, and up to 8 images.
-            </s-text>
-          </s-stack>
-        </s-box>
-      </s-section>
-
-      {/* Price Management */}
-      <s-section heading="Price Management">
-        <s-paragraph color="subdued">
-          Download current prices as a CSV or upload updated prices in bulk.
-        </s-paragraph>
-
-        <s-box padding="base" borderWidth="base" borderRadius="base">
-          <s-stack direction="block" gap="base">
-            <s-stack direction="inline" gap="base" alignItems="center">
               <exportFetcher.Form method="post">
                 <input type="hidden" name="intent" value="download-prices" />
-                <s-button variant="primary" type="submit" disabled={isExporting || undefined}>
+                <s-button type="submit" disabled={isExporting || undefined}>
                   Download Prices
                 </s-button>
               </exportFetcher.Form>
             </s-stack>
 
-            {lastPriceUpdateDate && (
-              <s-stack direction="inline" gap="small" alignItems="center">
-                <s-text color="subdued">Last price update:</s-text>
-                <RelativeTime date={lastPriceUpdateDate} />
-              </s-stack>
-            )}
-            {!lastPriceUpdateDate && (
-              <s-text color="subdued">No price updates recorded yet.</s-text>
-            )}
+            <s-text color="subdued">
+              Product exports include category, title, description (from card metafields), price, shipping, and up to 8 images.
+            </s-text>
           </s-stack>
         </s-box>
       </s-section>

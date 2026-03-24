@@ -5,11 +5,13 @@ import type {
   ActionFunctionArgs,
   MetaFunction,
 } from "react-router";
-import { useLoaderData, useRouteError } from "react-router";
+import { useFetcher, useLoaderData, useRouteError } from "react-router";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import db from "../db.server";
 import { approvePriceSuggestion } from "../lib/approve-price.server";
+import { isPricingApiConfigured } from "../lib/pricing-api.server";
+import { fetchAndCreatePriceSuggestions } from "../lib/fetch-price-suggestions.server";
 import {
   formatAction,
   actionIcon,
@@ -276,6 +278,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     };
   });
 
+  // Smart pricing metadata
+  const lastPriceFetch = await db.syncLog.findFirst({
+    where: { shopId: shop, marketplace: "helix", action: "price_fetch" },
+    orderBy: { createdAt: "desc" },
+    select: { createdAt: true },
+  });
+
   return {
     products: filteredProducts,
     productCount,
@@ -292,6 +301,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     totalErrors,
     hasNextPage,
     endCursor,
+    pricingApiConfigured: isPricingApiConfigured(),
+    lastPriceFetchDate: lastPriceFetch?.createdAt?.toISOString() ?? null,
   } satisfies LoaderData;
 };
 
@@ -300,6 +311,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const shop = session.shop;
   const formData = await request.formData();
   const intent = formData.get("intent");
+
+  if (intent === "fetch-prices") {
+    try {
+      const result = await fetchAndCreatePriceSuggestions(admin, shop);
+      return { fetchResult: result };
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : "Failed to fetch prices" };
+    }
+  }
 
   if (intent === "approve-price") {
     const suggestionId = formData.get("suggestionId") as string;
@@ -354,10 +374,19 @@ export default function Dashboard() {
     totalErrors,
     hasNextPage,
     endCursor,
+    pricingApiConfigured,
+    lastPriceFetchDate,
   } = useLoaderData<typeof loader>();
 
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
   const isNewUser = connectedMarketplaces.length === 0;
+
+  const fetchPricesFetcher = useFetcher();
+  const isFetchingPrices = fetchPricesFetcher.state === "submitting";
+  const fetchResult = (fetchPricesFetcher.data as Record<string, unknown>)?.fetchResult as
+    | { created: number; updated: number; notFound: number; total: number }
+    | undefined;
+  const fetchError = (fetchPricesFetcher.data as Record<string, unknown>)?.error as string | undefined;
 
   // Build suggestions list with product titles for the modal
   const suggestionsWithTitles = Object.values(priceSuggestions).map((s) => ({
@@ -550,6 +579,43 @@ export default function Dashboard() {
       {/* Zone 5: Products Sync Status */}
       <div id="products-sync" />
       <s-section heading="Products — Sync Status">
+        {/* Smart Pricing: fetch button inline with the table */}
+        {pricingApiConfigured && (
+          <s-box paddingBlock="base">
+            <s-stack direction="inline" gap="base" alignItems="center">
+              <fetchPricesFetcher.Form method="post">
+                <input type="hidden" name="intent" value="fetch-prices" />
+                <s-button
+                  type="submit"
+                  disabled={isFetchingPrices || undefined}
+                >
+                  {isFetchingPrices ? "Fetching..." : "Fetch Price Suggestions"}
+                </s-button>
+              </fetchPricesFetcher.Form>
+              {lastPriceFetchDate && (
+                <s-text color="subdued">
+                  Last fetch: <RelativeTime date={lastPriceFetchDate} />
+                </s-text>
+              )}
+            </s-stack>
+            {fetchResult && (
+              <s-box paddingBlock="small">
+                <s-banner tone="success" dismissible>
+                  Found pricing for {fetchResult.created + fetchResult.updated}{" "}
+                  of {fetchResult.total} graded products.
+                  {fetchResult.notFound > 0 &&
+                    ` ${fetchResult.notFound} had no pricing data.`}
+                </s-banner>
+              </s-box>
+            )}
+            {fetchError && (
+              <s-box paddingBlock="small">
+                <s-banner tone="critical" dismissible>{fetchError}</s-banner>
+              </s-box>
+            )}
+          </s-box>
+        )}
+
         <ProductsSyncTable
           products={products}
           connectedMarketplaces={connectedMarketplaces}
