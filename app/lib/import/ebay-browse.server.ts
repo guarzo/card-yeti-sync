@@ -116,6 +116,7 @@ export function extractCardDataFromEbayItem(
 
     isDuplicate: false,
     duplicateProductId: null,
+    duplicateFieldDiffs: [],
     dedupUnavailable: false,
     parseErrors: [],
     selected: true,

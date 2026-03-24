@@ -198,7 +198,16 @@ export function ImportReviewTable({
                     </td>
                     <td style={{ padding: "8px" }}>
                       {card.isDuplicate ? (
-                        <s-badge tone="warning">Duplicate</s-badge>
+                        card.duplicateFieldDiffs.length > 0 ? (
+                          <div>
+                            <s-badge tone="critical">Changed</s-badge>
+                            <div style={{ fontSize: "11px", color: "var(--s-color-text-secondary)", marginTop: "2px" }}>
+                              {card.duplicateFieldDiffs.join(", ")}
+                            </div>
+                          </div>
+                        ) : (
+                          <s-badge tone="warning">Exact duplicate</s-badge>
+                        )
                       ) : card.apiSuggestedPrice !== null ? (
                         <s-badge tone="success">API priced</s-badge>
                       ) : (

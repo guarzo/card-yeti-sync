@@ -2,7 +2,8 @@
  * Duplicate detection for product imports.
  *
  * Checks for existing products first by eBay item ID metafield (if present),
- * then by product handle. Uses batched GraphQL queries to reduce API calls.
+ * then by product handle. When a duplicate is found, fetches the existing
+ * product's key fields and compares them to identify field-level differences.
  */
 
 import type { ParsedCard } from "./types";
@@ -13,35 +14,122 @@ import { sleep } from "../timing";
 const BATCH_SIZE = 20;
 const BATCH_DELAY_MS = 200;
 
+/** Fragment for fields we compare against the imported card. */
+const PRODUCT_COMPARE_FIELDS = `
+  id
+  title
+  variants(first: 1) {
+    edges { node { price } }
+  }
+  ebayItemId: metafield(namespace: "card", key: "ebay_item_id") { value }
+  pokemon: metafield(namespace: "card", key: "pokemon") { value }
+  setName: metafield(namespace: "card", key: "set_name") { value }
+  number: metafield(namespace: "card", key: "number") { value }
+  gradingCompany: metafield(namespace: "card", key: "grading_company") { value }
+  grade: metafield(namespace: "card", key: "grade") { value }
+  certNumber: metafield(namespace: "card", key: "cert_number") { value }
+  condition: metafield(namespace: "card", key: "condition") { value }
+`;
+
 const BATCH_EBAY_ID_QUERY = `#graphql
   query batchEbayIdLookup($query: String!) {
     products(first: 250, query: $query) {
       edges {
         node {
-          id
-          ebayItemId: metafield(namespace: "card", key: "ebay_item_id") {
-            value
-          }
+          ${PRODUCT_COMPARE_FIELDS}
         }
       }
     }
   }
 `;
 
+interface ExistingProduct {
+  id: string;
+  title: string;
+  price: string | null;
+  ebayItemId: string | null;
+  pokemon: string | null;
+  setName: string | null;
+  number: string | null;
+  gradingCompany: string | null;
+  grade: string | null;
+  certNumber: string | null;
+  condition: string | null;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function parseProductNode(node: any): ExistingProduct {
+  return {
+    id: node.id,
+    title: node.title ?? "",
+    price: node.variants?.edges?.[0]?.node?.price ?? null,
+    ebayItemId: node.ebayItemId?.value ?? null,
+    pokemon: node.pokemon?.value ?? null,
+    setName: node.setName?.value ?? null,
+    number: node.number?.value ?? null,
+    gradingCompany: node.gradingCompany?.value ?? null,
+    grade: node.grade?.value ?? null,
+    certNumber: node.certNumber?.value ?? null,
+    condition: node.condition?.value ?? null,
+  };
+}
+
 /**
- * Build a single GraphQL query that looks up multiple handles via aliases.
+ * Compare a parsed card against an existing Shopify product and return
+ * a list of human-readable field differences.
+ */
+function compareFields(card: ParsedCard, existing: ExistingProduct): string[] {
+  const diffs: string[] = [];
+
+  const expectedTitle = buildTitle(card);
+  if (normalize(existing.title) !== normalize(expectedTitle)) {
+    diffs.push("title");
+  }
+
+  if (existing.price != null) {
+    const existingPrice = parseFloat(existing.price);
+    if (!isNaN(existingPrice) && Math.abs(existingPrice - card.finalPrice) > 0.01) {
+      diffs.push("price");
+    }
+  }
+
+  if (diff(existing.pokemon, card.pokemon)) diffs.push("pokemon");
+  if (diff(existing.setName, card.setName)) diffs.push("set");
+  if (diff(existing.number, card.number)) diffs.push("number");
+  if (diff(existing.gradingCompany, card.grader)) diffs.push("grader");
+  if (diff(existing.grade, card.grade)) diffs.push("grade");
+  if (diff(existing.certNumber, card.certNumber)) diffs.push("cert #");
+  if (diff(existing.condition, card.condition)) diffs.push("condition");
+
+  return diffs;
+}
+
+/** Normalize a string for loose comparison (trim, lowercase, collapse whitespace). */
+function normalize(s: string | null | undefined): string {
+  return (s ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/** Returns true when two optional string values are meaningfully different. */
+function diff(existing: string | null | undefined, incoming: string | null | undefined): boolean {
+  return normalize(existing) !== normalize(incoming);
+}
+
+/**
+ * Build a single GraphQL query that looks up multiple handles via aliases,
+ * including all comparison fields.
  */
 function buildBatchHandleQuery(handles: Array<{ index: number; handle: string }>): string {
   const fields = handles.map(({ index, handle }) => {
     const escaped = handle.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-    return `h${index}: productByHandle(handle: "${escaped}") { id }`;
+    return `h${index}: productByHandle(handle: "${escaped}") { ${PRODUCT_COMPARE_FIELDS} }`;
   });
   return `#graphql\n  query {\n    ${fields.join("\n    ")}\n  }`;
 }
 
 /**
  * Check cards for duplicates in Shopify using batched queries.
- * Mutates the isDuplicate, duplicateProductId, and dedupUnavailable fields.
+ * Mutates the isDuplicate, duplicateProductId, duplicateFieldDiffs,
+ * and dedupUnavailable fields.
  */
 export async function checkDuplicates(
   admin: AdminClient,
@@ -61,18 +149,19 @@ export async function checkDuplicates(
       const data = await res.json();
       const edges = data.data?.products?.edges ?? [];
 
-      // Build a set of found eBay IDs for matching
-      const foundIds = new Map<string, string>();
+      // Build a map of found eBay IDs → existing product data
+      const foundProducts = new Map<string, ExistingProduct>();
       for (const edge of edges) {
-        const ebayId = edge.node.ebayItemId?.value;
-        if (ebayId) foundIds.set(ebayId, edge.node.id);
+        const product = parseProductNode(edge.node);
+        if (product.ebayItemId) foundProducts.set(product.ebayItemId, product);
       }
 
       for (const card of batch) {
-        const productId = foundIds.get(card.ebayItemId);
-        if (productId) {
+        const existing = foundProducts.get(card.ebayItemId);
+        if (existing) {
           card.isDuplicate = true;
-          card.duplicateProductId = productId;
+          card.duplicateProductId = existing.id;
+          card.duplicateFieldDiffs = compareFields(card, existing);
           card.selected = false;
         }
       }
@@ -118,8 +207,10 @@ export async function checkDuplicates(
       for (const entry of handleEntries) {
         const result = data.data?.[`h${entry.index}`];
         if (result) {
+          const existing = parseProductNode(result);
           entry.card.isDuplicate = true;
-          entry.card.duplicateProductId = result.id;
+          entry.card.duplicateProductId = existing.id;
+          entry.card.duplicateFieldDiffs = compareFields(entry.card, existing);
           entry.card.selected = false;
         }
       }
