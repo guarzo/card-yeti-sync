@@ -52,7 +52,6 @@ function mapCondition(metafields: CardMetafields, productType?: string): string 
 export function mapToHelixRow(
   product: { id: string; title: string; descriptionHtml?: string; productType?: string },
   metafields: CardMetafields,
-  images: string[],
   variant: { price: string; compareAtPrice: string | null; sku: string; inventoryQuantity: number },
 ): string[] {
   const price = variant.compareAtPrice ?? variant.price ?? "0.00";
@@ -61,7 +60,9 @@ export function mapToHelixRow(
   // Build a descriptive title: "Pokemon - Set Name #Number Grade"
   const titleParts: string[] = [];
   if (metafields.pokemon) titleParts.push(metafields.pokemon);
-  if (metafields.set_name) titleParts.push(`- ${metafields.set_name}`);
+  if (metafields.set_name) {
+    titleParts.push(metafields.pokemon ? `- ${metafields.set_name}` : metafields.set_name);
+  }
   if (metafields.number) titleParts.push(`#${metafields.number}`);
   if (metafields.grading_company && metafields.grade) {
     titleParts.push(`${metafields.grading_company} ${metafields.grade}`);
@@ -90,12 +91,11 @@ export function generateHelixCSV(
   products: {
     product: { id: string; title: string; descriptionHtml?: string; productType?: string };
     metafields: CardMetafields;
-    images: string[];
     variant: { price: string; compareAtPrice: string | null; sku: string; inventoryQuantity: number };
   }[],
 ): string {
   const rows = products.map((p) =>
-    mapToHelixRow(p.product, p.metafields, p.images, p.variant),
+    mapToHelixRow(p.product, p.metafields, p.variant),
   );
   return generateCSV(HELIX_HEADERS, rows);
 }

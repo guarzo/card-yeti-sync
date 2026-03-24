@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect } from "react";
 import type {
   ActionFunctionArgs,
   HeadersFunction,
@@ -73,8 +73,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         const parsed = JSON.parse(log.details);
         mode = parsed.mode ?? "all";
         exportProductCount = parsed.productCount ?? 0;
-      } catch {
-        // ignore
+      } catch (err) {
+        console.error("Failed to parse syncLog.details for export at %s: %s", log.createdAt, log.details, err);
       }
     }
     return {
@@ -118,7 +118,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const csvData = exportProducts.map((p) => ({
       product: p.product as { id: string; title: string; descriptionHtml?: string; productType?: string },
       metafields: p.metafields,
-      images: p.images,
       variant: p.variant as {
         price: string;
         compareAtPrice: string | null;
@@ -180,9 +179,9 @@ export default function HelixSettings() {
     recentExports,
   } = useLoaderData<typeof loader>();
 
-  const exportAllFetcher = useFetcher({ key: "helix-export-all" });
-  const exportNewFetcher = useFetcher({ key: "helix-export-new" });
-  const pricesFetcher = useFetcher({ key: "helix-download-prices" });
+  const exportAllFetcher = useFetcher();
+  const exportNewFetcher = useFetcher();
+  const pricesFetcher = useFetcher();
   const isExporting =
     exportAllFetcher.state === "submitting" ||
     exportNewFetcher.state === "submitting" ||
@@ -191,57 +190,29 @@ export default function HelixSettings() {
   const exportAllResult = exportAllFetcher.data as { csv?: string; filename?: string; productCount?: number } | null;
   const exportNewResult = exportNewFetcher.data as { csv?: string; filename?: string; productCount?: number } | null;
 
-  const [showExportAllBanner, setShowExportAllBanner] = useState(false);
-  const [showExportNewBanner, setShowExportNewBanner] = useState(false);
-  const exportAllWasSubmitting = useRef(false);
-  const exportNewWasSubmitting = useRef(false);
-  const pricesWasSubmitting = useRef(false);
-
-  // Trigger CSV download only when an export action completes (not on remount)
+  // Trigger CSV download when each export action completes
   useEffect(() => {
-    if (exportAllFetcher.state === "submitting") {
-      exportAllWasSubmitting.current = true;
-      setShowExportAllBanner(false);
-    }
-    if (exportAllWasSubmitting.current && exportAllFetcher.state === "idle" && exportAllResult?.csv && exportAllResult?.filename) {
-      exportAllWasSubmitting.current = false;
-      downloadCSV(exportAllResult.csv, exportAllResult.filename);
-      setShowExportAllBanner(true);
-    }
-  }, [exportAllFetcher.state, exportAllResult]);
+    if (exportAllResult?.csv && exportAllResult?.filename) downloadCSV(exportAllResult.csv, exportAllResult.filename);
+  }, [exportAllResult]);
 
   useEffect(() => {
-    if (exportNewFetcher.state === "submitting") {
-      exportNewWasSubmitting.current = true;
-      setShowExportNewBanner(false);
-    }
-    if (exportNewWasSubmitting.current && exportNewFetcher.state === "idle" && exportNewResult?.csv && exportNewResult?.filename) {
-      exportNewWasSubmitting.current = false;
-      downloadCSV(exportNewResult.csv, exportNewResult.filename);
-      setShowExportNewBanner(true);
-    }
-  }, [exportNewFetcher.state, exportNewResult]);
+    if (exportNewResult?.csv && exportNewResult?.filename) downloadCSV(exportNewResult.csv, exportNewResult.filename);
+  }, [exportNewResult]);
 
   useEffect(() => {
-    if (pricesFetcher.state === "submitting") {
-      pricesWasSubmitting.current = true;
-    }
     const data = pricesFetcher.data as { csv?: string; filename?: string } | null;
-    if (pricesWasSubmitting.current && pricesFetcher.state === "idle" && data?.csv && data?.filename) {
-      pricesWasSubmitting.current = false;
-      downloadCSV(data.csv, data.filename);
-    }
-  }, [pricesFetcher.state, pricesFetcher.data]);
+    if (data?.csv && data?.filename) downloadCSV(data.csv, data.filename);
+  }, [pricesFetcher.data]);
 
   return (
     <s-page heading="Helix">
       {/* Success banners */}
-      {showExportAllBanner && exportAllResult?.productCount != null && (
+      {exportAllResult?.productCount != null && (
         <s-banner tone="success" dismissible>
           Exported {exportAllResult.productCount} products to CSV.
         </s-banner>
       )}
-      {showExportNewBanner && exportNewResult?.productCount != null && (
+      {exportNewResult?.productCount != null && (
         <s-banner tone="success" dismissible>
           Exported {exportNewResult.productCount} new products to CSV.
         </s-banner>
@@ -381,8 +352,8 @@ export default function HelixSettings() {
               <s-table-header>Products</s-table-header>
             </s-table-header-row>
             <s-table-body>
-              {recentExports.map((exp) => (
-                <s-table-row key={`${exp.createdAt}-${exp.mode}`}>
+              {recentExports.map((exp, idx) => (
+                <s-table-row key={`${exp.createdAt}-${exp.mode}-${idx}`}>
                   <s-table-cell>
                     <RelativeTime date={exp.createdAt} />
                   </s-table-cell>

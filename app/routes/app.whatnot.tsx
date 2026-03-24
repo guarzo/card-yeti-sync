@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import type {
   ActionFunctionArgs,
   HeadersFunction,
@@ -167,9 +167,9 @@ const SUPPORTED_TYPES = ["Graded Card", "Graded Slab"];
 export default function WhatnotSettings() {
   const { lastExportDate, productTypes, recentExports } =
     useLoaderData<typeof loader>();
-  const exportAllFetcher = useFetcher({ key: "whatnot-export-all" });
-  const exportNewFetcher = useFetcher({ key: "whatnot-export-new" });
-  const pricesFetcher = useFetcher({ key: "whatnot-download-prices" });
+  const exportAllFetcher = useFetcher();
+  const exportNewFetcher = useFetcher();
+  const pricesFetcher = useFetcher();
   const isExporting =
     exportAllFetcher.state === "submitting" ||
     exportNewFetcher.state === "submitting" ||
@@ -182,41 +182,19 @@ export default function WhatnotSettings() {
   const exportAllResult = exportAllFetcher.data as { csv?: string; filename?: string; productCount?: number } | null;
   const exportNewResult = exportNewFetcher.data as { csv?: string; filename?: string; productCount?: number } | null;
 
-  const exportAllWasSubmitting = useRef(false);
-  const exportNewWasSubmitting = useRef(false);
-  const pricesWasSubmitting = useRef(false);
-
-  // Trigger CSV download only when an export action completes (not on remount)
+  // Trigger CSV download when each export action completes
   useEffect(() => {
-    if (exportAllFetcher.state === "submitting") {
-      exportAllWasSubmitting.current = true;
-    }
-    if (exportAllWasSubmitting.current && exportAllFetcher.state === "idle" && exportAllResult?.csv && exportAllResult?.filename) {
-      exportAllWasSubmitting.current = false;
-      downloadCSV(exportAllResult.csv, exportAllResult.filename);
-    }
-  }, [exportAllFetcher.state, exportAllResult]);
+    if (exportAllResult?.csv && exportAllResult?.filename) downloadCSV(exportAllResult.csv, exportAllResult.filename);
+  }, [exportAllResult]);
 
   useEffect(() => {
-    if (exportNewFetcher.state === "submitting") {
-      exportNewWasSubmitting.current = true;
-    }
-    if (exportNewWasSubmitting.current && exportNewFetcher.state === "idle" && exportNewResult?.csv && exportNewResult?.filename) {
-      exportNewWasSubmitting.current = false;
-      downloadCSV(exportNewResult.csv, exportNewResult.filename);
-    }
-  }, [exportNewFetcher.state, exportNewResult]);
+    if (exportNewResult?.csv && exportNewResult?.filename) downloadCSV(exportNewResult.csv, exportNewResult.filename);
+  }, [exportNewResult]);
 
   useEffect(() => {
-    if (pricesFetcher.state === "submitting") {
-      pricesWasSubmitting.current = true;
-    }
     const data = pricesFetcher.data as { csv?: string; filename?: string } | null;
-    if (pricesWasSubmitting.current && pricesFetcher.state === "idle" && data?.csv && data?.filename) {
-      pricesWasSubmitting.current = false;
-      downloadCSV(data.csv, data.filename);
-    }
-  }, [pricesFetcher.state, pricesFetcher.data]);
+    if (data?.csv && data?.filename) downloadCSV(data.csv, data.filename);
+  }, [pricesFetcher.data]);
 
   return (
     <s-page heading="Whatnot">

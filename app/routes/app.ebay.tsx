@@ -20,6 +20,7 @@ import { getAccountSettings } from "../lib/account-settings.server";
 import { getInventoryItem, getOffersForSku } from "../lib/adapters/ebay.server";
 import { getAllProducts } from "../lib/shopify-helpers.server";
 import { reconcileShop } from "../lib/sync-engine.server";
+import { formatAction, actionIcon, actionTone } from "../lib/ui-helpers";
 
 interface ErrorListing {
   id: string;
@@ -117,13 +118,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
-  // Look up product titles for error display (non-critical — don't crash loader)
+  // Look up product titles for error + shadow activity display (non-critical)
   const productTitles: Record<string, string> = {};
-  if (recentErrors.length > 0) {
-    const ids = recentErrors
+  {
+    const errorIds = recentErrors
       .map((e) => e.shopifyProductId)
       .filter((id) => id.startsWith("gid://"));
-    if (ids.length > 0) {
+    // Shadow log product IDs will be collected after shadowStats is built
+    const allIds = [...new Set(errorIds)];
+    if (allIds.length > 0) {
       try {
         const titleResponse = await admin.graphql(
           `#graphql
@@ -135,7 +138,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
               }
             }
           }`,
-          { variables: { ids } },
+          { variables: { ids: allIds } },
         );
         const titleData = await titleResponse.json();
         for (const node of titleData.data?.nodes ?? []) {
@@ -144,7 +147,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           }
         }
       } catch (err) {
-        console.warn("Failed to fetch product titles for error display:", err);
+        console.warn("Failed to fetch product titles:", err);
       }
     }
   }
@@ -200,6 +203,33 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         createdAt: l.createdAt.toISOString(),
       })),
     };
+
+    // Fetch titles for shadow log product IDs not already resolved
+    const shadowProductIds = shadowStats.recent
+      .map((l) => l.productId)
+      .filter((id): id is string => id != null && id.startsWith("gid://") && !productTitles[id]);
+    const uniqueShadowIds = [...new Set(shadowProductIds)];
+    if (uniqueShadowIds.length > 0) {
+      try {
+        const titleResponse = await admin.graphql(
+          `#graphql
+          query getProductTitles($ids: [ID!]!) {
+            nodes(ids: $ids) {
+              ... on Product { id title }
+            }
+          }`,
+          { variables: { ids: uniqueShadowIds } },
+        );
+        const titleData = await titleResponse.json();
+        for (const node of titleData.data?.nodes ?? []) {
+          if (node?.id && node?.title) {
+            productTitles[node.id] = node.title;
+          }
+        }
+      } catch (err) {
+        console.warn("Failed to fetch shadow product titles:", err);
+      }
+    }
   }
 
   return {
@@ -533,7 +563,7 @@ export default function EbaySettings() {
             Recent actions Card Yeti would have taken on eBay. Matches mean
             Marketplace Connector is producing the same result.
           </s-paragraph>
-          <s-table variant="list">
+          <s-table>
             <s-table-header-row>
               <s-table-header>Action</s-table-header>
               <s-table-header>Product</s-table-header>
@@ -541,24 +571,33 @@ export default function EbaySettings() {
               <s-table-header>Time</s-table-header>
             </s-table-header-row>
             <s-table-body>
-              {shadowStats.recent.map((log, i) => (
-                <s-table-row key={i}>
-                  <s-table-cell>{log.action.replace("shadow_", "")}</s-table-cell>
-                  <s-table-cell>
-                    <s-text>{log.productId?.split("/").pop() ?? "—"}</s-text>
-                  </s-table-cell>
-                  <s-table-cell>
-                    {log.status === "success" ? (
-                      <s-badge tone="success">Match</s-badge>
-                    ) : (
-                      <s-badge tone="critical">Discrepancy</s-badge>
-                    )}
-                  </s-table-cell>
-                  <s-table-cell>
-                    <RelativeTime date={log.createdAt} />
-                  </s-table-cell>
-                </s-table-row>
-              ))}
+              {shadowStats.recent.map((log, i) => {
+                const action = log.action.replace("shadow_", "");
+                const title = log.productId ? productTitles[log.productId] : null;
+                return (
+                  <s-table-row key={i}>
+                    <s-table-cell>
+                      <s-stack direction="inline" gap="small" alignItems="center">
+                        <s-icon type={actionIcon(action)} size="small" tone={actionTone(action)} />
+                        <s-text>{formatAction(action)}</s-text>
+                      </s-stack>
+                    </s-table-cell>
+                    <s-table-cell>
+                      <s-text>{title ?? (log.productId ? log.productId.split("/").pop() : "—")}</s-text>
+                    </s-table-cell>
+                    <s-table-cell>
+                      {log.status === "success" ? (
+                        <s-badge tone="success">Match</s-badge>
+                      ) : (
+                        <s-badge tone="critical">Discrepancy</s-badge>
+                      )}
+                    </s-table-cell>
+                    <s-table-cell>
+                      <RelativeTime date={log.createdAt} />
+                    </s-table-cell>
+                  </s-table-row>
+                );
+              })}
             </s-table-body>
           </s-table>
         </s-section>
