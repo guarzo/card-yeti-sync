@@ -8,7 +8,7 @@ export interface AccountSettings {
 }
 
 const DEFAULTS: AccountSettings = {
-  shadowMode: false,
+  shadowMode: true,
   inventorySyncEnabled: true,
   crossChannelDelistEnabled: true,
   discountPercent: 5,
@@ -19,7 +19,7 @@ export function getAccountSettings(
 ): AccountSettings {
   const raw = (account.settings ?? {}) as Record<string, unknown>;
   return {
-    shadowMode: raw.shadowMode === true,
+    shadowMode: raw.shadowMode !== false,
     inventorySyncEnabled: raw.inventorySyncEnabled !== false,
     crossChannelDelistEnabled: raw.crossChannelDelistEnabled !== false,
     discountPercent:

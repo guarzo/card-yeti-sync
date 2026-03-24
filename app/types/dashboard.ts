@@ -25,6 +25,7 @@ export interface MarketplaceInfo {
   errorCount: number;
   pendingCount: number;
   tokenExpiry: string | null;
+  lastExportDate: string | null;
 }
 
 export interface PriceSuggestion {

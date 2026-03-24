@@ -14,16 +14,15 @@ export function SyncSummary({
     ([key]) => marketplaces[key]?.connected,
   );
 
+  if (connectedMarketplaces.length === 0) return null;
+
   return (
     <s-box padding="base" borderWidth="base" borderRadius="base">
       <s-stack direction="block" gap="base">
         <s-text type="strong">Listings by Marketplace</s-text>
         <s-divider />
 
-        {connectedMarketplaces.length === 0 ? (
-          <s-text color="subdued">No marketplaces connected</s-text>
-        ) : (
-          connectedMarketplaces.map(([key, config]) => (
+        {connectedMarketplaces.map(([key, config]) => (
             <s-stack
               key={key}
               direction="inline"
@@ -40,8 +39,7 @@ export function SyncSummary({
                 {marketplaces[key]?.activeCount ?? 0}
               </s-text>
             </s-stack>
-          ))
-        )}
+          ))}
 
         {productsAwaitingSync > 0 && (
           <>

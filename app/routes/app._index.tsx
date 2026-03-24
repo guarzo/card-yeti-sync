@@ -29,6 +29,7 @@ import { MarketplaceTile } from "../components/dashboard/MarketplaceTile";
 import { SyncSummary } from "../components/dashboard/SyncSummary";
 import { ProductsSyncTable } from "../components/dashboard/ProductsSyncTable";
 import { BulkApproveModal } from "../components/dashboard/BulkApproveModal";
+import { WelcomeHero } from "../components/dashboard/WelcomeHero";
 import type {
   Product,
   SyncLogEntry,
@@ -139,6 +140,21 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   // Build marketplace info map
   const marketplaceNames = Object.keys(MARKETPLACE_CONFIG) as MarketplaceKey[];
+  // Fetch last export dates for each marketplace
+  const lastExports = await db.syncLog.findMany({
+    where: {
+      shopId: shop,
+      action: "list",
+      marketplace: { in: marketplaceNames },
+    },
+    orderBy: { createdAt: "desc" },
+    distinct: ["marketplace"],
+    select: { marketplace: true, createdAt: true },
+  });
+  const lastExportMap = new Map(
+    lastExports.map((e) => [e.marketplace, e.createdAt.toISOString()]),
+  );
+
   const marketplaces: Record<string, MarketplaceInfo> = {};
   for (const name of marketplaceNames) {
     const account = accounts.find((a) => a.marketplace === name);
@@ -148,6 +164,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       errorCount: 0,
       pendingCount: 0,
       tokenExpiry: account?.tokenExpiry?.toISOString() ?? null,
+      lastExportDate: lastExportMap.get(name) ?? null,
     };
   }
   let totalActiveListings = 0;
@@ -340,6 +357,7 @@ export default function Dashboard() {
   } = useLoaderData<typeof loader>();
 
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
+  const isNewUser = connectedMarketplaces.length === 0;
 
   // Build suggestions list with product titles for the modal
   const suggestionsWithTitles = Object.values(priceSuggestions).map((s) => ({
@@ -351,177 +369,183 @@ export default function Dashboard() {
 
   return (
     <s-page heading="Dashboard">
-      {/* Zone 1: Attention Zone */}
+      {/* Zone 1: Attention Zone (only for connected users) */}
       <AttentionZone
         marketplaces={marketplaces}
         totalErrors={totalErrors}
         pendingPriceReviews={pendingPriceReviews}
       />
 
-      {/* Zone 2: Stat Row */}
-      <s-box paddingBlock="base">
-        <s-grid
-          gridTemplateColumns="repeat(auto-fit, minmax(140px, 1fr))"
-          gap="base"
-        >
-          <s-grid-item>
-            <StatCard label="Total Products" value={productCount} background="subdued" href="#products-sync" />
-          </s-grid-item>
-          <s-grid-item>
-            <StatCard label="Active Listings" value={totalActiveListings} background="subdued" href="#products-sync" />
-          </s-grid-item>
-          <s-grid-item>
-            <StatCard
-              label="Price Reviews"
-              value={pendingPriceReviews}
-              background={pendingPriceReviews > 0 ? undefined : "subdued"}
-              href="?filter=price_reviews#products-sync"
+      {isNewUser ? (
+        <WelcomeHero productCount={productCount} />
+      ) : (
+        <>
+          {/* Zone 2: Stat Row */}
+          <s-box paddingBlock="base">
+            <s-grid
+              gridTemplateColumns="repeat(auto-fit, minmax(140px, 1fr))"
+              gap="base"
             >
-              {pendingPriceReviews > 0 && <s-badge tone="info">new</s-badge>}
-            </StatCard>
-          </s-grid-item>
-          <s-grid-item>
-            <StatCard label="Pending Syncs" value={totalPendingSyncs} background="subdued" href="?filter=pending#products-sync" />
-          </s-grid-item>
-          <s-grid-item>
-            <StatCard
-              label="Errors"
-              value={totalErrors}
-              background={totalErrors > 0 ? undefined : "subdued"}
-              href="?filter=errors#products-sync"
+              <s-grid-item>
+                <StatCard label="Total Products" value={productCount} background="subdued" href="#products-sync" tone="neutral" />
+              </s-grid-item>
+              <s-grid-item>
+                <StatCard label="Active Listings" value={totalActiveListings} background="subdued" href="#products-sync" tone="success" />
+              </s-grid-item>
+              <s-grid-item>
+                <StatCard
+                  label="Price Reviews"
+                  value={pendingPriceReviews}
+                  background={pendingPriceReviews > 0 ? undefined : "subdued"}
+                  href="?filter=price_reviews#products-sync"
+                  tone="info"
+                >
+                  {pendingPriceReviews > 0 && <s-badge tone="info">new</s-badge>}
+                </StatCard>
+              </s-grid-item>
+              <s-grid-item>
+                <StatCard label="Pending Syncs" value={totalPendingSyncs} background="subdued" href="?filter=pending#products-sync" tone="caution" />
+              </s-grid-item>
+              <s-grid-item>
+                <StatCard
+                  label="Errors"
+                  value={totalErrors}
+                  background={totalErrors > 0 ? undefined : "subdued"}
+                  href="?filter=errors#products-sync"
+                  tone="critical"
+                >
+                  {totalErrors > 0 && <s-badge tone="critical">{totalErrors}</s-badge>}
+                </StatCard>
+              </s-grid-item>
+            </s-grid>
+          </s-box>
+
+          {/* Zone 3: Marketplace Health Tiles */}
+          <s-box paddingBlock="base">
+            <s-grid
+              gridTemplateColumns="repeat(auto-fit, minmax(180px, 1fr))"
+              gap="base"
             >
-              {totalErrors > 0 && <s-badge tone="critical">{totalErrors}</s-badge>}
-            </StatCard>
-          </s-grid-item>
-        </s-grid>
-      </s-box>
-
-      {/* Zone 3: Marketplace Health Tiles */}
-      <s-box paddingBlock="base">
-        <s-grid
-          gridTemplateColumns="1fr 1fr 1fr 1fr"
-          gap="base"
-        >
-          {/* Shopify tile */}
-          <s-grid-item>
-            <MarketplaceTile
-              name={SHOPIFY_CONFIG.label}
-              icon={SHOPIFY_CONFIG.icon}
-              connected={true}
-              isShopify={true}
-              activeCount={productCount}
-              secondaryCount={activeProductCount}
-              secondaryLabel="active"
-            />
-          </s-grid-item>
-
-          {/* Marketplace tiles */}
-          {Object.entries(MARKETPLACE_CONFIG).map(([key, config]) => {
-            const info = marketplaces[key];
-            if (!info) return null;
-            return (
-              <s-grid-item key={key}>
+              {/* Shopify tile */}
+              <s-grid-item>
                 <MarketplaceTile
-                  name={config.label}
-                  icon={config.icon}
-                  connected={info.connected}
-                  activeCount={info.activeCount}
-                  pendingCount={info.pendingCount}
-                  errorCount={info.errorCount}
-                  href={config.href}
+                  name={SHOPIFY_CONFIG.label}
+                  icon={SHOPIFY_CONFIG.icon}
+                  connected={true}
+                  isShopify={true}
+                  activeCount={productCount}
+                  secondaryCount={activeProductCount}
+                  secondaryLabel="active"
                 />
               </s-grid-item>
-            );
-          })}
-        </s-grid>
-      </s-box>
 
-      {/* Zone 4: Two-Column Middle */}
-      <s-box paddingBlock="base">
-        <s-grid
-          gridTemplateColumns="3fr 2fr"
-          gap="base"
-        >
-          {/* Left: Recent Activity */}
-          <s-grid-item>
-            <s-box padding="base" borderWidth="base" borderRadius="base">
-              <s-stack direction="block" gap="base">
-                <s-text type="strong">Recent Activity</s-text>
-                <s-divider />
-                {recentLogs.length === 0 ? (
-                  <EmptyState
-                    icon="clock"
-                    heading="No sync activity yet"
-                    description="Connect a marketplace and sync products to see activity here."
-                  />
-                ) : (
-                  <s-table variant="list">
-                    <s-table-header-row>
-                      <s-table-header>Action</s-table-header>
-                      <s-table-header>Product</s-table-header>
-                      <s-table-header>Marketplace</s-table-header>
-                      <s-table-header>Status</s-table-header>
-                      <s-table-header>Time</s-table-header>
-                    </s-table-header-row>
-                    <s-table-body>
-                      {recentLogs.map((log) => (
-                        <s-table-row key={log.id}>
-                          <s-table-cell>
-                            <s-stack
-                              direction="inline"
-                              gap="small"
-                              alignItems="center"
-                            >
-                              <s-icon
-                                type={actionIcon(log.action)}
-                                size="small"
-                                tone={actionTone(log.action)}
-                              />
-                              <s-text>{formatAction(log.action)}</s-text>
-                            </s-stack>
-                          </s-table-cell>
-                          <s-table-cell>
-                            <s-text>
-                              {log.productTitle ?? (
-                                <s-text color="subdued">--</s-text>
-                              )}
-                            </s-text>
-                          </s-table-cell>
-                          <s-table-cell>
-                            <s-badge>{marketplaceLabel(log.marketplace)}</s-badge>
-                          </s-table-cell>
-                          <s-table-cell>
-                            <s-badge
-                              tone={
-                                log.status === "success"
-                                  ? "success"
-                                  : "critical"
-                              }
-                            >
-                              {log.status}
-                            </s-badge>
-                          </s-table-cell>
-                          <s-table-cell>
-                            <RelativeTime date={log.createdAt} />
-                          </s-table-cell>
-                        </s-table-row>
-                      ))}
-                    </s-table-body>
-                  </s-table>
-                )}
-              </s-stack>
-            </s-box>
-          </s-grid-item>
+              {/* Marketplace tiles */}
+              {Object.entries(MARKETPLACE_CONFIG).map(([key, config]) => {
+                const info = marketplaces[key];
+                if (!info) return null;
+                return (
+                  <s-grid-item key={key}>
+                    <MarketplaceTile
+                      name={config.label}
+                      icon={config.icon}
+                      connected={info.connected}
+                      activeCount={info.activeCount}
+                      pendingCount={info.pendingCount}
+                      errorCount={info.errorCount}
+                      href={config.href}
+                      ctaLabel={config.ctaLabel}
+                      lastExportDate={info.lastExportDate}
+                    />
+                  </s-grid-item>
+                );
+              })}
+            </s-grid>
+          </s-box>
 
-          {/* Right: Sync Summary */}
-          <s-grid-item>
-            <SyncSummary
-              marketplaces={marketplaces}
-              productsAwaitingSync={productsAwaitingSync}
-            />
-          </s-grid-item>
-        </s-grid>
-      </s-box>
+          {/* Zone 4: Two-Column Middle */}
+          <s-box paddingBlock="base">
+            <s-grid
+              gridTemplateColumns="3fr 2fr"
+              gap="base"
+            >
+              {/* Left: Recent Activity */}
+              <s-grid-item>
+                <s-box padding="base" borderWidth="base" borderRadius="base">
+                  <s-stack direction="block" gap="base">
+                    <s-text type="strong">Recent Activity</s-text>
+                    <s-divider />
+                    {recentLogs.length === 0 ? (
+                      <s-text color="subdued">Activity will appear here once you sync products.</s-text>
+                    ) : (
+                      <s-table>
+                        <s-table-header-row>
+                          <s-table-header>Action</s-table-header>
+                          <s-table-header>Product</s-table-header>
+                          <s-table-header>Marketplace</s-table-header>
+                          <s-table-header>Status</s-table-header>
+                          <s-table-header>Time</s-table-header>
+                        </s-table-header-row>
+                        <s-table-body>
+                          {recentLogs.map((log) => (
+                            <s-table-row key={log.id}>
+                              <s-table-cell>
+                                <s-stack
+                                  direction="inline"
+                                  gap="small"
+                                  alignItems="center"
+                                >
+                                  <s-icon
+                                    type={actionIcon(log.action)}
+                                    size="small"
+                                    tone={actionTone(log.action)}
+                                  />
+                                  <s-text>{formatAction(log.action)}</s-text>
+                                </s-stack>
+                              </s-table-cell>
+                              <s-table-cell>
+                                <s-text>
+                                  {log.productTitle ?? (
+                                    <s-text color="subdued">--</s-text>
+                                  )}
+                                </s-text>
+                              </s-table-cell>
+                              <s-table-cell>
+                                <s-badge>{marketplaceLabel(log.marketplace)}</s-badge>
+                              </s-table-cell>
+                              <s-table-cell>
+                                <s-badge
+                                  tone={
+                                    log.status === "success"
+                                      ? "success"
+                                      : "critical"
+                                  }
+                                >
+                                  {log.status}
+                                </s-badge>
+                              </s-table-cell>
+                              <s-table-cell>
+                                <RelativeTime date={log.createdAt} />
+                              </s-table-cell>
+                            </s-table-row>
+                          ))}
+                        </s-table-body>
+                      </s-table>
+                    )}
+                  </s-stack>
+                </s-box>
+              </s-grid-item>
+
+              {/* Right: Sync Summary */}
+              <s-grid-item>
+                <SyncSummary
+                  marketplaces={marketplaces}
+                  productsAwaitingSync={productsAwaitingSync}
+                />
+              </s-grid-item>
+            </s-grid>
+          </s-box>
+        </>
+      )}
 
       {/* Zone 5: Products Sync Status */}
       <div id="products-sync" />

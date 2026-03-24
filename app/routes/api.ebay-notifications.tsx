@@ -6,10 +6,6 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
  * Required by eBay for all Developer Program applications (GDPR compliance).
  * GET handles the challenge/response handshake for endpoint validation.
  * POST receives account deletion notifications.
- *
- * Cross-channel delisting on eBay sale is handled by the Shopify orders/create
- * webhook instead — eBay orders sync to Shopify via Marketplace Connector,
- * which triggers our webhook handler.
  */
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -21,7 +17,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   const verificationToken = process.env.EBAY_VERIFICATION_TOKEN ?? "";
-  const endpoint = process.env.EBAY_NOTIFICATION_ENDPOINT ?? url.origin + url.pathname;
+  const endpoint =
+    process.env.EBAY_NOTIFICATION_ENDPOINT ?? url.origin + url.pathname;
 
   const encoder = new TextEncoder();
   const data = encoder.encode(challengeCode + verificationToken + endpoint);
@@ -32,6 +29,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   return Response.json({ challengeResponse });
 };
+
+// Throttle logging — only log once per 5 minutes to avoid noise from eBay retries
+let lastLogTime = 0;
+let suppressedCount = 0;
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   let payload: Record<string, unknown>;
@@ -44,13 +45,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const metadata = payload.metadata as Record<string, unknown> | undefined;
   const topic = typeof metadata?.topic === "string" ? metadata.topic : "";
 
-  console.log(`eBay notification received: ${topic}`);
-
-  if (topic === "MARKETPLACE.ACCOUNT_DELETION") {
-    // Required by eBay — acknowledge receipt. Account data cleanup happens
-    // via the Shopify app/uninstalled webhook when the merchant uninstalls.
-    console.log("  Account deletion notification acknowledged");
+  const now = Date.now();
+  if (now - lastLogTime > 5 * 60 * 1000) {
+    const suppressed =
+      suppressedCount > 0 ? ` (${suppressedCount} suppressed since last log)` : "";
+    console.log(`eBay notification: ${topic}${suppressed}`);
+    lastLogTime = now;
+    suppressedCount = 0;
+  } else {
+    suppressedCount++;
   }
 
+  // Acknowledge all notifications with 200.
+  // Account data cleanup is handled via Shopify app/uninstalled webhook.
   return new Response("OK", { status: 200 });
 };

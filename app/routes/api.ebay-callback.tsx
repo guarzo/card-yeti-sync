@@ -1,29 +1,34 @@
 import type { LoaderFunctionArgs } from "react-router";
 import { redirect } from "react-router";
 import { exchangeCodeForTokens } from "../lib/ebay-client.server";
-import { validateHmacState } from "../lib/hmac-state.server";
-import { authenticate } from "../shopify.server";
+import { validateHmacStateStandalone } from "../lib/hmac-state.server";
 import db from "../db.server";
 
+/**
+ * eBay OAuth callback handler.
+ *
+ * This endpoint is hit by a direct browser redirect from eBay — NOT inside the
+ * Shopify admin iframe — so we cannot use authenticate.admin(). Instead we
+ * extract and verify the shop from the HMAC-signed state parameter we created.
+ */
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
-
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   const error = url.searchParams.get("error");
 
-  if (error || !code) {
-    console.error("eBay OAuth denied or missing code:", error);
+  // Validate HMAC-signed state to get the shop (no Shopify session available)
+  const state = url.searchParams.get("state");
+  const stateResult = validateHmacStateStandalone(state);
+  if (!stateResult.valid) {
+    console.error("eBay OAuth state validation failed");
     return redirect("/app/ebay?error=oauth_denied");
   }
 
-  // Validate HMAC-signed CSRF state parameter (timing-safe)
-  const state = url.searchParams.get("state");
-  const stateResult = validateHmacState(state, shop);
-  if (!stateResult.valid) {
-    console.error("eBay OAuth state validation failed for shop:", shop);
-    return redirect("/app/ebay?error=oauth_denied");
+  const shop = stateResult.shop;
+
+  if (error || !code) {
+    console.error("eBay OAuth denied or missing code:", error);
+    return redirect(buildAdminRedirect(shop, "error=oauth_denied"));
   }
 
   // Verify and invalidate the nonce (single-use, time-limited)
@@ -36,7 +41,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     storedNonce.expiresAt < new Date()
   ) {
     console.error("eBay OAuth callback invalid or expired nonce");
-    return redirect("/app/ebay?error=oauth_denied");
+    return redirect(buildAdminRedirect(shop, "error=oauth_denied"));
   }
   await db.oAuthNonce.delete({ where: { nonce: stateResult.nonce } });
 
@@ -60,5 +65,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
-  return redirect("/app/ebay?success=connected");
+  return redirect(buildAdminRedirect(shop, "success=connected"));
 };
+
+/**
+ * Build a redirect URL into the Shopify admin for our embedded app.
+ * Since the callback is outside the admin iframe, we redirect to the
+ * admin URL which will re-open the app in the embedded context.
+ */
+function buildAdminRedirect(shop: string, query: string): string {
+  const storeSlug = shop.replace(".myshopify.com", "");
+  return `https://admin.shopify.com/store/${storeSlug}/apps/card-yeti-sync/app/ebay?${query}`;
+}

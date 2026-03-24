@@ -1,13 +1,19 @@
+import { useEffect } from "react";
 import type {
+  ActionFunctionArgs,
   HeadersFunction,
   LoaderFunctionArgs,
   MetaFunction,
 } from "react-router";
-import { useLoaderData, useRouteError } from "react-router";
+import { useFetcher, useLoaderData, useRouteError } from "react-router";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import db from "../db.server";
 import { fetchProductTypeCounts } from "../lib/graphql-queries.server";
+import { getAllProducts } from "../lib/shopify-helpers.server";
+import { generateWhatnotCSV } from "../lib/mappers/whatnot-mapper";
+import { downloadCSV } from "../lib/csv-download";
+import { generatePricesCSV } from "./api.prices";
 import { StatCard } from "../components/StatCard";
 import { RelativeTime } from "../components/RelativeTime";
 
@@ -49,15 +55,111 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   } satisfies LoaderData;
 };
 
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const { admin, session } = await authenticate.admin(request);
+  const shop = session.shop;
+  const formData = await request.formData();
+  const intent = formData.get("intent");
+
+  if (intent === "export-csv") {
+    const mode = (formData.get("mode") as string) ?? "all";
+
+    const products = await getAllProducts(admin, { query: "status:active" });
+    let exportProducts = products.filter((p) => p.variant !== null);
+
+    if (mode === "new") {
+      const exportedIds = await db.marketplaceListing.findMany({
+        where: { shopId: shop, marketplace: "whatnot" },
+        select: { shopifyProductId: true },
+      });
+      const exportedSet = new Set(exportedIds.map((e) => e.shopifyProductId));
+      exportProducts = exportProducts.filter(
+        (p) => !exportedSet.has(p.product.id as string),
+      );
+    }
+
+    const csvData = exportProducts.map((p) => ({
+      product: p.product as { title: string; productType: string },
+      metafields: p.metafields,
+      images: p.images,
+      variant: p.variant as {
+        price: string;
+        compareAtPrice: string | null;
+        sku: string;
+        inventoryQuantity: number;
+      },
+    }));
+
+    const csv = generateWhatnotCSV(csvData);
+
+    await db.syncLog.create({
+      data: {
+        shopId: shop,
+        marketplace: "whatnot",
+        action: "list",
+        status: "success",
+        details: JSON.stringify({ type: "csv_export", mode, productCount: csvData.length }),
+      },
+    });
+
+    const BATCH_SIZE = 25;
+    for (let i = 0; i < exportProducts.length; i += BATCH_SIZE) {
+      await Promise.all(
+        exportProducts.slice(i, i + BATCH_SIZE).map((p) => {
+          const productId = p.product.id as string;
+          return db.marketplaceListing.upsert({
+            where: {
+              shopId_shopifyProductId_marketplace: {
+                shopId: shop,
+                shopifyProductId: productId,
+                marketplace: "whatnot",
+              },
+            },
+            create: {
+              shopId: shop,
+              shopifyProductId: productId,
+              marketplace: "whatnot",
+              status: "active",
+              lastSyncedAt: new Date(),
+            },
+            update: { lastSyncedAt: new Date() },
+          });
+        }),
+      );
+    }
+
+    const timestamp = new Date().toISOString().slice(0, 10);
+    return { csv, filename: `whatnot-export-${timestamp}.csv`, productCount: csvData.length };
+  }
+
+  if (intent === "download-prices") {
+    const csv = await generatePricesCSV(admin);
+    const timestamp = new Date().toISOString().slice(0, 10);
+    return { csv, filename: `prices-${timestamp}.csv` };
+  }
+
+  return null;
+};
+
 const SUPPORTED_TYPES = ["Graded Card", "Graded Slab"];
 
 export default function WhatnotSettings() {
   const { lastExportDate, lastPriceUpdateDate, productTypes } =
     useLoaderData<typeof loader>();
+  const exportFetcher = useFetcher();
+  const isExporting = exportFetcher.state === "submitting";
 
   const exportableCount = productTypes
     .filter((t) => SUPPORTED_TYPES.includes(t.type))
     .reduce((sum, t) => sum + t.count, 0);
+
+  // Trigger CSV download when export action completes
+  useEffect(() => {
+    const data = exportFetcher.data as { csv?: string; filename?: string } | null;
+    if (data?.csv && data?.filename) {
+      downloadCSV(data.csv, data.filename);
+    }
+  }, [exportFetcher.data]);
 
   return (
     <s-page heading="Whatnot">
@@ -98,13 +200,25 @@ export default function WhatnotSettings() {
             <s-divider />
 
             <s-stack direction="inline" gap="base" alignItems="center">
-              <a href="/api/export-whatnot?mode=all" download>
-                <s-button variant="primary">Export All Products</s-button>
-              </a>
-              <a href="/api/export-whatnot?mode=new" download>
-                <s-button>Export New Only</s-button>
-              </a>
+              <exportFetcher.Form method="post">
+                <input type="hidden" name="intent" value="export-csv" />
+                <input type="hidden" name="mode" value="all" />
+                <s-button variant="primary" type="submit" disabled={isExporting || undefined}>
+                  {isExporting ? "Exporting..." : "Export All Products"}
+                </s-button>
+              </exportFetcher.Form>
+              <exportFetcher.Form method="post">
+                <input type="hidden" name="intent" value="export-csv" />
+                <input type="hidden" name="mode" value="new" />
+                <s-button type="submit" disabled={isExporting || undefined}>
+                  {isExporting ? "Exporting..." : "Export New Only"}
+                </s-button>
+              </exportFetcher.Form>
             </s-stack>
+
+            <s-text color="subdued">
+              Exports include category, title, description (from card metafields), price, shipping, and up to 8 images.
+            </s-text>
           </s-stack>
         </s-box>
       </s-section>
@@ -118,9 +232,12 @@ export default function WhatnotSettings() {
         <s-box padding="base" borderWidth="base" borderRadius="base">
           <s-stack direction="block" gap="base">
             <s-stack direction="inline" gap="base" alignItems="center">
-              <a href="/api/prices" download>
-                <s-button variant="primary">Download Prices</s-button>
-              </a>
+              <exportFetcher.Form method="post">
+                <input type="hidden" name="intent" value="download-prices" />
+                <s-button variant="primary" type="submit" disabled={isExporting || undefined}>
+                  Download Prices
+                </s-button>
+              </exportFetcher.Form>
             </s-stack>
 
             {lastPriceUpdateDate && (
@@ -136,155 +253,6 @@ export default function WhatnotSettings() {
         </s-box>
       </s-section>
 
-      {/* Export Preview */}
-      <s-section heading="Export Preview">
-        <s-paragraph color="subdued">
-          What your Whatnot CSV export will include for each product.
-        </s-paragraph>
-
-        <s-box
-          padding="base"
-          borderWidth="base"
-          borderRadius="base"
-          background="subdued"
-        >
-          <s-stack direction="block" gap="base">
-            <s-stack direction="block" gap="small">
-              <s-text type="strong">Column Mapping</s-text>
-              <s-paragraph color="subdued">
-                Based on your product data structure
-              </s-paragraph>
-            </s-stack>
-
-            <s-divider />
-
-            <s-grid gap="base">
-              <s-grid-item>
-                <s-stack direction="block" gap="small">
-                  <s-text color="subdued">Category</s-text>
-                  <s-text>Trading Card Games &gt; Pokemon Cards</s-text>
-                </s-stack>
-              </s-grid-item>
-              <s-grid-item>
-                <s-stack direction="block" gap="small">
-                  <s-text color="subdued">Title</s-text>
-                  <s-text>Your Shopify product title</s-text>
-                </s-stack>
-              </s-grid-item>
-              <s-grid-item>
-                <s-stack direction="block" gap="small">
-                  <s-text color="subdued">Description</s-text>
-                  <s-text>Auto-built from card metafields</s-text>
-                </s-stack>
-              </s-grid-item>
-              <s-grid-item>
-                <s-stack direction="block" gap="small">
-                  <s-text color="subdued">Price</s-text>
-                  <s-text>eBay comp price or Shopify price</s-text>
-                </s-stack>
-              </s-grid-item>
-              <s-grid-item>
-                <s-stack direction="block" gap="small">
-                  <s-text color="subdued">Shipping</s-text>
-                  <s-text>Auto-detected by product type</s-text>
-                </s-stack>
-              </s-grid-item>
-              <s-grid-item>
-                <s-stack direction="block" gap="small">
-                  <s-text color="subdued">Images</s-text>
-                  <s-text>Up to 8 from Shopify product</s-text>
-                </s-stack>
-              </s-grid-item>
-            </s-grid>
-          </s-stack>
-        </s-box>
-      </s-section>
-
-      {/* API Integration */}
-      <s-section heading="API Integration">
-        <s-box padding="base" borderWidth="base" borderRadius="base">
-          <s-stack direction="block" gap="base">
-            <s-stack direction="inline" gap="base" alignItems="center">
-              <s-icon type="clock" tone="info" />
-              <s-stack direction="block" gap="small">
-                <s-text type="strong">
-                  Whatnot Seller API — Developer Preview
-                </s-text>
-                <s-paragraph color="subdued">
-                  Whatnot&apos;s API is currently in Developer Preview and not
-                  accepting new applicants. When access opens, Card Yeti will
-                  support real-time sync directly through their GraphQL API.
-                </s-paragraph>
-              </s-stack>
-            </s-stack>
-
-            <s-divider />
-
-            <s-text type="strong">Planned API Features</s-text>
-            <s-unordered-list>
-              <s-list-item>
-                Real-time inventory sync (no more CSV uploads)
-              </s-list-item>
-              <s-list-item>
-                Automatic delisting when cards sell on other channels
-              </s-list-item>
-              <s-list-item>
-                Live listing status tracking in the dashboard
-              </s-list-item>
-              <s-list-item>Buy It Now price management</s-list-item>
-            </s-unordered-list>
-          </s-stack>
-        </s-box>
-      </s-section>
-
-      {/* Inventory by Type */}
-      <s-section heading="Inventory by Type">
-        <s-paragraph color="subdued">
-          Currently, only Graded Cards are exported to Whatnot. Support for other
-          types is planned.
-        </s-paragraph>
-        <s-stack direction="block" gap="small">
-          {productTypes.map(({ type, count }) => (
-            <s-box
-              key={type}
-              padding="base"
-              borderWidth="base"
-              borderRadius="base"
-            >
-              <s-stack
-                direction="inline"
-                gap="base"
-                alignItems="center"
-                justifyContent="space-between"
-              >
-                <s-stack direction="inline" gap="small" alignItems="center">
-                  <s-icon
-                    type="product"
-                    tone={
-                      SUPPORTED_TYPES.includes(type) ? "success" : undefined
-                    }
-                  />
-                  <s-text type="strong">{type}</s-text>
-                </s-stack>
-                <s-stack direction="inline" gap="small" alignItems="center">
-                  <s-text>{count} products</s-text>
-                  {SUPPORTED_TYPES.includes(type) ? (
-                    <s-badge tone="success">Supported</s-badge>
-                  ) : (
-                    <s-badge>Planned</s-badge>
-                  )}
-                </s-stack>
-              </s-stack>
-            </s-box>
-          ))}
-          {productTypes.length === 0 && (
-            <s-paragraph color="subdued">
-              No active products found. Add products to your Shopify store to see
-              inventory breakdown.
-            </s-paragraph>
-          )}
-        </s-stack>
-      </s-section>
     </s-page>
   );
 }

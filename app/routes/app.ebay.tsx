@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import type {
   HeadersFunction,
   LoaderFunctionArgs,
@@ -11,7 +11,6 @@ import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { getAuthorizationUrl } from "../lib/ebay-client.server";
 import db from "../db.server";
-import { daysUntil } from "../lib/ui-helpers";
 import { generateHmacState } from "../lib/hmac-state.server";
 import { ConnectionCard } from "../components/ConnectionCard";
 import { StatCard } from "../components/StatCard";
@@ -44,10 +43,20 @@ interface ShadowStats {
   recent: ShadowLogEntry[];
 }
 
+interface Policy {
+  id: string;
+  name: string;
+}
+
+interface PolicySet {
+  fulfillment: Policy[];
+  payment: Policy[];
+  return: Policy[];
+}
+
 interface LoaderData {
   connected: boolean;
   authUrl: string;
-  tokenExpiry: string | null;
   listingCount: number;
   errorCount: number;
   pendingCount: number;
@@ -58,6 +67,12 @@ interface LoaderData {
   shadowStats: ShadowStats;
   inventorySyncEnabled: boolean;
   crossChannelDelistEnabled: boolean;
+  policies: PolicySet;
+  selectedPolicies: {
+    fulfillmentPolicyId: string | null;
+    paymentPolicyId: string | null;
+    returnPolicyId: string | null;
+  };
 }
 
 export const meta: MetaFunction = () => [{ title: "eBay | Card Yeti Sync" }];
@@ -150,6 +165,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const inventorySyncEnabled = settings?.inventorySyncEnabled ?? true;
   const crossChannelDelistEnabled = settings?.crossChannelDelistEnabled ?? true;
 
+  // Fetch eBay business policies for the connected account
+  let policies: PolicySet = { fulfillment: [], payment: [], return: [] };
+  if (account) {
+    try {
+      const { getExistingPolicies } = await import("../lib/ebay-policies.server");
+      policies = await getExistingPolicies(account);
+    } catch (err) {
+      console.warn("Failed to fetch eBay policies:", err);
+    }
+  }
+  const accountSettings = (account?.settings ?? {}) as Record<string, string | null>;
+  const selectedPolicies = {
+    fulfillmentPolicyId: accountSettings.fulfillmentPolicyId ?? null,
+    paymentPolicyId: accountSettings.paymentPolicyId ?? null,
+    returnPolicyId: accountSettings.returnPolicyId ?? null,
+  };
+
   let shadowStats: ShadowStats = { total: 0, matches: 0, discrepancies: 0, recent: [] };
   if (shadowMode) {
     const shadowLogs = await db.syncLog.findMany({
@@ -177,7 +209,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     pendingCount,
     delistedCount,
     authUrl,
-    tokenExpiry: account?.tokenExpiry?.toISOString() ?? null,
     recentErrors: recentErrors.map((e) => ({
       ...e,
       updatedAt: e.updatedAt.toISOString(),
@@ -187,6 +218,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     shadowStats,
     inventorySyncEnabled,
     crossChannelDelistEnabled,
+    policies,
+    selectedPolicies,
   } satisfies LoaderData;
 };
 
@@ -276,7 +309,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (intent === "toggle-shadow") {
     const currentSettings = (account.settings ?? {}) as Record<string, unknown>;
-    const newShadowMode = !(currentSettings.shadowMode === true);
+    const newShadowMode = !(currentSettings.shadowMode !== false);
     await db.marketplaceAccount.update({
       where: { id: account.id },
       data: {
@@ -393,23 +426,19 @@ export default function EbaySettings() {
     pendingCount,
     delistedCount,
     authUrl,
-    tokenExpiry,
     recentErrors,
     productTitles,
     shadowMode,
     shadowStats,
     inventorySyncEnabled,
     crossChannelDelistEnabled,
+    policies,
+    selectedPolicies,
   } = useLoaderData<typeof loader>();
   const [searchParams] = useSearchParams();
   const success = searchParams.get("success");
   const error = searchParams.get("error");
 
-  const [now] = useState(() => Date.now());
-  const tokenExpired =
-    tokenExpiry != null && new Date(tokenExpiry).getTime() <= now;
-  const tokenDays =
-    tokenExpiry && !tokenExpired ? daysUntil(tokenExpiry) : null;
 
   // Clean up URL params after reading
   useEffect(() => {
@@ -462,12 +491,12 @@ export default function EbaySettings() {
           }
           disconnectAction={<DisconnectButton marketplace="eBay" />}
         >
-          <s-grid gap="base">
+          <s-grid gridTemplateColumns="repeat(auto-fit, minmax(140px, 1fr))" gap="base">
             <s-grid-item>
-              <StatCard label="Active Listings" value={listingCount} />
+              <StatCard label="Active Listings" value={listingCount} tone="success" />
             </s-grid-item>
             <s-grid-item>
-              <StatCard label="Pending" value={pendingCount} />
+              <StatCard label="Pending" value={pendingCount} tone="caution" />
             </s-grid-item>
             <s-grid-item>
               <StatCard label="Delisted" value={delistedCount} />
@@ -475,6 +504,7 @@ export default function EbaySettings() {
             <s-grid-item>
               <StatCard
                 label="Errors"
+                tone="critical"
                 value={
                   errorCount > 0 ? (
                     <s-badge tone="critical">{errorCount}</s-badge>
@@ -486,25 +516,9 @@ export default function EbaySettings() {
             </s-grid-item>
             <s-grid-item>
               <StatCard
-                label="Token Expires"
+                label="Status"
                 value={
-                  <s-stack direction="inline" gap="small" alignItems="center">
-                    <span>
-                      {tokenExpired
-                        ? "Expired"
-                        : tokenDays !== null
-                          ? `${tokenDays} days`
-                          : "Unknown"}
-                    </span>
-                    {tokenExpired ? (
-                      <s-badge tone="critical">Reconnect</s-badge>
-                    ) : (
-                      tokenDays !== null &&
-                      tokenDays <= 7 && (
-                        <s-badge tone="warning">Renew soon</s-badge>
-                      )
-                    )}
-                  </s-stack>
+                  <s-badge tone="success">Connected</s-badge>
                 }
               />
             </s-grid-item>
@@ -587,83 +601,74 @@ export default function EbaySettings() {
         </s-section>
       )}
 
-      {/* Business Policies */}
-      <s-section heading="Business Policies">
-        <s-paragraph color="subdued">
-          Default policies applied to all new eBay listings.
-        </s-paragraph>
-        <s-stack direction="block" gap="base">
-          <s-box padding="base" borderWidth="base" borderRadius="base">
-            <s-stack
-              direction="inline"
-              gap="base"
-              alignItems="center"
-              justifyContent="space-between"
-            >
-              <s-stack direction="inline" gap="base" alignItems="center">
-                <s-icon type="delivery" tone="info" />
-                <s-stack direction="block" gap="small">
-                  <s-text type="strong">Fulfillment Policy</s-text>
-                  <s-text color="subdued">
-                    USPS Ground Advantage + First Class + Priority. 1 business
-                    day handling. Free shipping over $75.
-                  </s-text>
-                </s-stack>
+      {/* Business Policies (only when connected) */}
+      {connected && (
+        <s-section heading="Business Policies">
+          <s-paragraph color="subdued">
+            Select the eBay business policies to use for new listings.
+            These are read from your eBay seller account.
+          </s-paragraph>
+          {policies.fulfillment.length === 0 && policies.payment.length === 0 && policies.return.length === 0 ? (
+            <s-banner tone="warning">
+              No business policies found on your eBay account. Create policies in
+              eBay Seller Hub before listing products.
+            </s-banner>
+          ) : (
+            <Form method="post">
+              <input type="hidden" name="intent" value="save-policies" />
+              <s-stack direction="block" gap="base">
+                <s-box padding="base" borderWidth="base" borderRadius="base">
+                  <s-stack direction="block" gap="small">
+                    <s-text type="strong">Fulfillment Policy</s-text>
+                    <select name="fulfillmentPolicyId" style={{ width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #ccc" }}>
+                      <option value="">— Select —</option>
+                      {policies.fulfillment.map((p) => (
+                        <option key={p.id} value={p.id} selected={p.id === selectedPolicies.fulfillmentPolicyId || undefined}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                  </s-stack>
+                </s-box>
+                <s-box padding="base" borderWidth="base" borderRadius="base">
+                  <s-stack direction="block" gap="small">
+                    <s-text type="strong">Payment Policy</s-text>
+                    <select name="paymentPolicyId" style={{ width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #ccc" }}>
+                      <option value="">— Select —</option>
+                      {policies.payment.map((p) => (
+                        <option key={p.id} value={p.id} selected={p.id === selectedPolicies.paymentPolicyId || undefined}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                  </s-stack>
+                </s-box>
+                <s-box padding="base" borderWidth="base" borderRadius="base">
+                  <s-stack direction="block" gap="small">
+                    <s-text type="strong">Return Policy</s-text>
+                    <select name="returnPolicyId" style={{ width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #ccc" }}>
+                      <option value="">— Select —</option>
+                      {policies.return.map((p) => (
+                        <option key={p.id} value={p.id} selected={p.id === selectedPolicies.returnPolicyId || undefined}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                  </s-stack>
+                </s-box>
+                <s-button variant="primary" type="submit">
+                  Save Policies
+                </s-button>
               </s-stack>
-              <s-button variant="tertiary" disabled>
-                Edit
-              </s-button>
-            </s-stack>
-          </s-box>
-          <s-box padding="base" borderWidth="base" borderRadius="base">
-            <s-stack
-              direction="inline"
-              gap="base"
-              alignItems="center"
-              justifyContent="space-between"
-            >
-              <s-stack direction="inline" gap="base" alignItems="center">
-                <s-icon type="credit-card" tone="info" />
-                <s-stack direction="block" gap="small">
-                  <s-text type="strong">Payment Policy</s-text>
-                  <s-text color="subdued">
-                    Immediate payment required. eBay managed payments.
-                  </s-text>
-                </s-stack>
-              </s-stack>
-              <s-button variant="tertiary" disabled>
-                Edit
-              </s-button>
-            </s-stack>
-          </s-box>
-          <s-box padding="base" borderWidth="base" borderRadius="base">
-            <s-stack
-              direction="inline"
-              gap="base"
-              alignItems="center"
-              justifyContent="space-between"
-            >
-              <s-stack direction="inline" gap="base" alignItems="center">
-                <s-icon type="return" tone="info" />
-                <s-stack direction="block" gap="small">
-                  <s-text type="strong">Return Policy</s-text>
-                  <s-text color="subdued">
-                    30-day returns. Buyer pays return shipping.
-                  </s-text>
-                </s-stack>
-              </s-stack>
-              <s-button variant="tertiary" disabled>
-                Edit
-              </s-button>
-            </s-stack>
-          </s-box>
-        </s-stack>
-      </s-section>
+            </Form>
+          )}
+        </s-section>
+      )}
 
-      {/* Sync Settings */}
-      <s-section heading="Sync Settings">
-        <s-stack direction="block" gap="base">
-          {connected && (
+      {/* Sync Settings (only when connected) */}
+      {connected && (
+        <s-section heading="Sync Settings">
+          <s-stack direction="block" gap="base">
             <s-stack
               direction="inline"
               gap="base"
@@ -684,49 +689,43 @@ export default function EbaySettings() {
                 </s-button>
               </Form>
             </s-stack>
-          )}
 
-          {connected && <s-divider />}
+            <s-divider />
 
-          {connected && (
-            <>
-              <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
-                <s-stack direction="block" gap="small">
-                  <s-text type="strong">Inventory sync</s-text>
-                  <s-text color="subdued">
-                    Delist from eBay when inventory reaches zero. Relist when inventory is restored.
-                  </s-text>
-                </s-stack>
-                <Form method="post">
-                  <input type="hidden" name="intent" value="toggle-inventory-sync" />
-                  <s-button variant={inventorySyncEnabled ? "primary" : "tertiary"} type="submit">
-                    {inventorySyncEnabled ? "Enabled" : "Disabled"}
-                  </s-button>
-                </Form>
+            <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
+              <s-stack direction="block" gap="small">
+                <s-text type="strong">Inventory sync</s-text>
+                <s-text color="subdued">
+                  Delist from eBay when inventory reaches zero. Relist when inventory is restored.
+                </s-text>
               </s-stack>
+              <Form method="post">
+                <input type="hidden" name="intent" value="toggle-inventory-sync" />
+                <s-button variant={inventorySyncEnabled ? "primary" : "tertiary"} type="submit">
+                  {inventorySyncEnabled ? "Enabled" : "Disabled"}
+                </s-button>
+              </Form>
+            </s-stack>
 
-              <s-divider />
+            <s-divider />
 
-              <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
-                <s-stack direction="block" gap="small">
-                  <s-text type="strong">Cross-channel delisting</s-text>
-                  <s-text color="subdued">
-                    Remove from eBay when a card sells on another marketplace.
-                  </s-text>
-                </s-stack>
-                <Form method="post">
-                  <input type="hidden" name="intent" value="toggle-cross-channel-delist" />
-                  <s-button variant={crossChannelDelistEnabled ? "primary" : "tertiary"} type="submit">
-                    {crossChannelDelistEnabled ? "Enabled" : "Disabled"}
-                  </s-button>
-                </Form>
+            <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
+              <s-stack direction="block" gap="small">
+                <s-text type="strong">Cross-channel delisting</s-text>
+                <s-text color="subdued">
+                  Remove from eBay when a card sells on another marketplace.
+                </s-text>
               </s-stack>
-            </>
-          )}
+              <Form method="post">
+                <input type="hidden" name="intent" value="toggle-cross-channel-delist" />
+                <s-button variant={crossChannelDelistEnabled ? "primary" : "tertiary"} type="submit">
+                  {crossChannelDelistEnabled ? "Enabled" : "Disabled"}
+                </s-button>
+              </Form>
+            </s-stack>
 
-          {connected && <s-divider />}
+            <s-divider />
 
-          {connected && (
             <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
               <s-stack direction="block" gap="small">
                 <s-text type="strong">Reconciliation</s-text>
@@ -739,11 +738,9 @@ export default function EbaySettings() {
                 <s-button type="submit">Reconcile Now</s-button>
               </Form>
             </s-stack>
-          )}
 
-          {connected && <s-divider />}
+            <s-divider />
 
-          {connected && (
             <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
               <s-stack direction="block" gap="small">
                 <s-text type="strong">Import existing listings</s-text>
@@ -757,9 +754,9 @@ export default function EbaySettings() {
                 <s-button type="submit">Import from eBay</s-button>
               </Form>
             </s-stack>
-          )}
-        </s-stack>
-      </s-section>
+          </s-stack>
+        </s-section>
+      )}
     </s-page>
   );
 }

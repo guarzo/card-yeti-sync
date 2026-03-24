@@ -101,7 +101,7 @@ export function ProductsSyncTable({
       </s-stack>
 
       {/* Products table */}
-      <s-table variant="list">
+      <s-table>
         <s-table-header-row>
           <s-table-header>Product</s-table-header>
           <s-table-header>Price</s-table-header>
@@ -111,7 +111,9 @@ export function ProductsSyncTable({
               {marketplaceLabel(mp)}
             </s-table-header>
           ))}
-          <s-table-header>Last Synced</s-table-header>
+          {connectedMarketplaces.length > 0 && (
+            <s-table-header>Last Synced</s-table-header>
+          )}
         </s-table-header-row>
         <s-table-body>
           {products.map((product) => {
@@ -186,13 +188,15 @@ export function ProductsSyncTable({
                   );
                 })}
 
-                <s-table-cell>
-                  {lastSynced ? (
-                    <RelativeTime date={lastSynced} />
-                  ) : (
-                    <s-text color="subdued">--</s-text>
-                  )}
-                </s-table-cell>
+                {connectedMarketplaces.length > 0 && (
+                  <s-table-cell>
+                    {lastSynced ? (
+                      <RelativeTime date={lastSynced} />
+                    ) : (
+                      <s-text color="subdued">--</s-text>
+                    )}
+                  </s-table-cell>
+                )}
               </s-table-row>
             );
           })}

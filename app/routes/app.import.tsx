@@ -284,7 +284,7 @@ export default function ImportPage() {
   const { pricingApiConfigured } = useLoaderData<LoaderData>();
   const [importMethod, setImportMethod] = useState<"csv" | "ebay">("csv");
   const [editedCards, setEditedCards] = useState<ParsedCard[] | null>(null);
-  const [status, setStatus] = useState("active");
+  const [status, setStatus] = useState("draft");
   const [rotateNewArrivals, setRotateNewArrivals] = useState(true);
   const [resetCount, setResetCount] = useState(0);
 
@@ -543,6 +543,20 @@ export default function ImportPage() {
             </s-stack>
           </s-section>
 
+          {/* Dry-run notice */}
+          <s-banner tone="info">
+            <s-stack direction="block" gap="small">
+              <s-text type="strong">Preview Mode</s-text>
+              <s-text>
+                Review the products above. Clicking Import will create{" "}
+                {parsedCards.filter((c) => c.selected && !c.isDuplicate).length}{" "}
+                real Shopify products as{" "}
+                <s-text type="strong">{status}</s-text>.
+                {status === "draft" && " Draft products won't be visible to customers until published."}
+              </s-text>
+            </s-stack>
+          </s-banner>
+
           {/* Actions */}
           <s-stack direction="inline" gap="base">
             <s-button onClick={handleReset}>Back</s-button>
@@ -558,7 +572,7 @@ export default function ImportPage() {
             >
               {isCreating
                 ? "Importing..."
-                : `Import ${parsedCards.filter((c) => c.selected && !c.isDuplicate).length} Products`}
+                : `Import ${parsedCards.filter((c) => c.selected && !c.isDuplicate).length} Products as ${status === "draft" ? "Draft" : "Active"}`}
             </s-button>
           </s-stack>
         </s-stack>
