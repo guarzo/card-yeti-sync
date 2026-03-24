@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type {
   ActionFunctionArgs,
   HeadersFunction,
@@ -182,19 +182,41 @@ export default function WhatnotSettings() {
   const exportAllResult = exportAllFetcher.data as { csv?: string; filename?: string; productCount?: number } | null;
   const exportNewResult = exportNewFetcher.data as { csv?: string; filename?: string; productCount?: number } | null;
 
-  // Trigger CSV download when each export action completes
+  const exportAllWasSubmitting = useRef(false);
+  const exportNewWasSubmitting = useRef(false);
+  const pricesWasSubmitting = useRef(false);
+
+  // Trigger CSV download only when an export action completes (not on remount)
   useEffect(() => {
-    if (exportAllResult?.csv && exportAllResult?.filename) downloadCSV(exportAllResult.csv, exportAllResult.filename);
-  }, [exportAllResult]);
+    if (exportAllFetcher.state === "submitting") {
+      exportAllWasSubmitting.current = true;
+    }
+    if (exportAllWasSubmitting.current && exportAllFetcher.state === "idle" && exportAllResult?.csv && exportAllResult?.filename) {
+      exportAllWasSubmitting.current = false;
+      downloadCSV(exportAllResult.csv, exportAllResult.filename);
+    }
+  }, [exportAllFetcher.state, exportAllResult]);
 
   useEffect(() => {
-    if (exportNewResult?.csv && exportNewResult?.filename) downloadCSV(exportNewResult.csv, exportNewResult.filename);
-  }, [exportNewResult]);
+    if (exportNewFetcher.state === "submitting") {
+      exportNewWasSubmitting.current = true;
+    }
+    if (exportNewWasSubmitting.current && exportNewFetcher.state === "idle" && exportNewResult?.csv && exportNewResult?.filename) {
+      exportNewWasSubmitting.current = false;
+      downloadCSV(exportNewResult.csv, exportNewResult.filename);
+    }
+  }, [exportNewFetcher.state, exportNewResult]);
 
   useEffect(() => {
+    if (pricesFetcher.state === "submitting") {
+      pricesWasSubmitting.current = true;
+    }
     const data = pricesFetcher.data as { csv?: string; filename?: string } | null;
-    if (data?.csv && data?.filename) downloadCSV(data.csv, data.filename);
-  }, [pricesFetcher.data]);
+    if (pricesWasSubmitting.current && pricesFetcher.state === "idle" && data?.csv && data?.filename) {
+      pricesWasSubmitting.current = false;
+      downloadCSV(data.csv, data.filename);
+    }
+  }, [pricesFetcher.state, pricesFetcher.data]);
 
   return (
     <s-page heading="Whatnot">

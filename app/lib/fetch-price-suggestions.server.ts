@@ -105,7 +105,14 @@ export async function fetchAndCreatePriceSuggestions(
       if (existing) {
         await db.priceSuggestion.update({
           where: { id: existing.id },
-          data: { status: "approved", reviewedAt: new Date() },
+          data: {
+            status: "approved",
+            reviewedAt: new Date(),
+            currentPrice: currentPriceNum,
+            suggestedPrice,
+            certNumber: result.certNumber,
+            source: "api",
+          },
         });
       }
       skipped++;

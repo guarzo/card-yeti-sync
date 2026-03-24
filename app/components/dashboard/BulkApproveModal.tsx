@@ -149,11 +149,17 @@ export function BulkApproveModal({
                     {(() => {
                       const current = parseFloat(s.currentPrice);
                       const suggested = parseFloat(s.suggestedPrice);
-                      if (!current) return null;
-                      const pct = Math.round(((suggested - current) / current) * 100);
+                      if (!Number.isFinite(current) || !Number.isFinite(suggested) || current === 0) return null;
+                      const rawPct = ((suggested - current) / current) * 100;
+                      if (rawPct === 0) return <s-badge tone="success">0%</s-badge>;
+                      const isNeg = rawPct < 0;
+                      const absRaw = Math.abs(rawPct);
+                      const display = absRaw < 1
+                        ? (isNeg ? "-<1%" : "+<1%")
+                        : `${isNeg ? "-" : "+"}${Math.round(absRaw)}%`;
                       return (
-                        <s-badge tone={pct < 0 ? "critical" : "success"}>
-                          {pct > 0 ? "+" : ""}{pct}%
+                        <s-badge tone={isNeg ? "critical" : "success"}>
+                          {display}
                         </s-badge>
                       );
                     })()}

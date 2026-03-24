@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   ActionFunctionArgs,
   HeadersFunction,
@@ -191,29 +191,57 @@ export default function HelixSettings() {
   const exportAllResult = exportAllFetcher.data as { csv?: string; filename?: string; productCount?: number } | null;
   const exportNewResult = exportNewFetcher.data as { csv?: string; filename?: string; productCount?: number } | null;
 
-  // Trigger CSV download when each export action completes
+  const [showExportAllBanner, setShowExportAllBanner] = useState(false);
+  const [showExportNewBanner, setShowExportNewBanner] = useState(false);
+  const exportAllWasSubmitting = useRef(false);
+  const exportNewWasSubmitting = useRef(false);
+  const pricesWasSubmitting = useRef(false);
+
+  // Trigger CSV download only when an export action completes (not on remount)
   useEffect(() => {
-    if (exportAllResult?.csv && exportAllResult?.filename) downloadCSV(exportAllResult.csv, exportAllResult.filename);
-  }, [exportAllResult]);
+    if (exportAllFetcher.state === "submitting") {
+      exportAllWasSubmitting.current = true;
+      setShowExportAllBanner(false);
+    }
+    if (exportAllWasSubmitting.current && exportAllFetcher.state === "idle" && exportAllResult?.csv && exportAllResult?.filename) {
+      exportAllWasSubmitting.current = false;
+      downloadCSV(exportAllResult.csv, exportAllResult.filename);
+      setShowExportAllBanner(true);
+    }
+  }, [exportAllFetcher.state, exportAllResult]);
 
   useEffect(() => {
-    if (exportNewResult?.csv && exportNewResult?.filename) downloadCSV(exportNewResult.csv, exportNewResult.filename);
-  }, [exportNewResult]);
+    if (exportNewFetcher.state === "submitting") {
+      exportNewWasSubmitting.current = true;
+      setShowExportNewBanner(false);
+    }
+    if (exportNewWasSubmitting.current && exportNewFetcher.state === "idle" && exportNewResult?.csv && exportNewResult?.filename) {
+      exportNewWasSubmitting.current = false;
+      downloadCSV(exportNewResult.csv, exportNewResult.filename);
+      setShowExportNewBanner(true);
+    }
+  }, [exportNewFetcher.state, exportNewResult]);
 
   useEffect(() => {
+    if (pricesFetcher.state === "submitting") {
+      pricesWasSubmitting.current = true;
+    }
     const data = pricesFetcher.data as { csv?: string; filename?: string } | null;
-    if (data?.csv && data?.filename) downloadCSV(data.csv, data.filename);
-  }, [pricesFetcher.data]);
+    if (pricesWasSubmitting.current && pricesFetcher.state === "idle" && data?.csv && data?.filename) {
+      pricesWasSubmitting.current = false;
+      downloadCSV(data.csv, data.filename);
+    }
+  }, [pricesFetcher.state, pricesFetcher.data]);
 
   return (
     <s-page heading="Helix">
       {/* Success banners */}
-      {exportAllResult?.productCount != null && (
+      {showExportAllBanner && exportAllResult?.productCount != null && (
         <s-banner tone="success" dismissible>
           Exported {exportAllResult.productCount} products to CSV.
         </s-banner>
       )}
-      {exportNewResult?.productCount != null && (
+      {showExportNewBanner && exportNewResult?.productCount != null && (
         <s-banner tone="success" dismissible>
           Exported {exportNewResult.productCount} new products to CSV.
         </s-banner>
@@ -353,8 +381,8 @@ export default function HelixSettings() {
               <s-table-header>Products</s-table-header>
             </s-table-header-row>
             <s-table-body>
-              {recentExports.map((exp, i) => (
-                <s-table-row key={i}>
+              {recentExports.map((exp) => (
+                <s-table-row key={`${exp.createdAt}-${exp.mode}`}>
                   <s-table-cell>
                     <RelativeTime date={exp.createdAt} />
                   </s-table-cell>

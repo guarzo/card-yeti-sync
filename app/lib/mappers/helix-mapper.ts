@@ -28,6 +28,12 @@ function mapCondition(metafields: CardMetafields, productType?: string): string 
   if (isGraded) {
     const grade = metafields.grade ?? "";
     const gradeNum = parseFloat(grade);
+    if (isNaN(gradeNum)) {
+      const normalized = grade.toLowerCase().trim();
+      if (normalized === "authentic" || normalized === "a") return "Authentic";
+      if (normalized === "qualified" || normalized === "q") return "Qualified";
+      return grade;
+    }
     if (gradeNum >= 9) return "Near Mint";
     if (gradeNum >= 7) return "Lightly Played";
     if (gradeNum >= 5) return "Moderately Played";
