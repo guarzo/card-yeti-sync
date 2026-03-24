@@ -165,6 +165,7 @@ function parseEbayRow(
     // Status — will be set by dedup check
     isDuplicate: false,
     duplicateProductId: null,
+    duplicateFieldDiffs: [],
     dedupUnavailable: false,
     parseErrors: [],
     selected: true,

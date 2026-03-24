@@ -34,6 +34,8 @@ export interface ParsedCard {
   // Status
   isDuplicate: boolean;
   duplicateProductId: string | null;
+  /** Fields that differ between the imported card and the existing Shopify product. Empty = exact match. */
+  duplicateFieldDiffs: string[];
   /** True when the duplicate check could not be completed (API error). */
   dedupUnavailable: boolean;
   parseErrors: string[];

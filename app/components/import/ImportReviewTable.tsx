@@ -11,6 +11,26 @@ function formatPrice(price: number | null | undefined): string {
   return `$${price.toFixed(2)}`;
 }
 
+function renderStatusBadge(card: ParsedCard) {
+  if (card.isDuplicate) {
+    if (card.duplicateFieldDiffs.length > 0) {
+      return (
+        <div>
+          <s-badge tone="critical">Changed</s-badge>
+          <div style={{ fontSize: "11px", color: "var(--s-color-text-secondary)", marginTop: "2px" }}>
+            {card.duplicateFieldDiffs.join(", ")}
+          </div>
+        </div>
+      );
+    }
+    return <s-badge tone="warning">Exact duplicate</s-badge>;
+  }
+  if (card.apiSuggestedPrice !== null) {
+    return <s-badge tone="success">API priced</s-badge>;
+  }
+  return <s-badge tone="info">eBay price</s-badge>;
+}
+
 export function ImportReviewTable({
   cards,
   onCardsChange,
@@ -197,13 +217,7 @@ export function ImportReviewTable({
                       )}
                     </td>
                     <td style={{ padding: "8px" }}>
-                      {card.isDuplicate ? (
-                        <s-badge tone="warning">Duplicate</s-badge>
-                      ) : card.apiSuggestedPrice !== null ? (
-                        <s-badge tone="success">API priced</s-badge>
-                      ) : (
-                        <s-badge tone="info">eBay price</s-badge>
-                      )}
+                      {renderStatusBadge(card)}
                     </td>
                   </tr>
                 );
