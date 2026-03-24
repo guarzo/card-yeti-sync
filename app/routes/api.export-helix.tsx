@@ -27,7 +27,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const csvData = exportProducts.map((p) => ({
     product: p.product as { id: string; title: string; descriptionHtml?: string; productType?: string },
     metafields: p.metafields,
-    images: p.images,
     variant: p.variant as {
       price: string;
       compareAtPrice: string | null;

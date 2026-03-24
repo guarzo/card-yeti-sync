@@ -1,14 +1,17 @@
+import { Link } from "react-router";
+import { RelativeTime } from "../RelativeTime";
+
 interface MarketplaceTileProps {
   name: string;
   icon: string;
   connected: boolean;
   isShopify?: boolean;
   activeCount: number;
-  secondaryCount?: number;
-  secondaryLabel?: string;
   pendingCount?: number;
   errorCount?: number;
   href?: string;
+  ctaLabel?: string;
+  lastExportDate?: string | null;
 }
 
 export function MarketplaceTile({
@@ -17,45 +20,69 @@ export function MarketplaceTile({
   connected,
   isShopify,
   activeCount,
-  secondaryCount,
-  secondaryLabel,
   pendingCount = 0,
   errorCount = 0,
   href,
+  ctaLabel,
+  lastExportDate,
 }: MarketplaceTileProps) {
-  return (
-    <s-box
-      padding="base"
-      borderWidth="base"
-      borderRadius="base"
-      background={!connected && !isShopify ? "subdued" : undefined}
-    >
+  // Disconnected marketplace: show a centered CTA with optional last export info
+  if (!connected && !isShopify) {
+    const tile = (
+      <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
+        <s-stack direction="block" gap="base" alignItems="center">
+          <s-icon
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            type={icon as any}
+            color="subdued"
+          />
+          <s-text type="strong">{name}</s-text>
+          {lastExportDate && (
+            <span style={{ color: "var(--s-color-text-subdued)" }}>
+              Last export: <RelativeTime date={lastExportDate} />
+            </span>
+          )}
+          <span style={{ fontWeight: 600, color: "var(--s-color-text-interactive)" }}>
+            {ctaLabel ?? `Set up ${name}`} →
+          </span>
+        </s-stack>
+      </s-box>
+    );
+
+    if (href) {
+      return (
+        <Link to={href} style={{ textDecoration: "none", color: "inherit" }}>
+          {tile}
+        </Link>
+      );
+    }
+    return tile;
+  }
+
+  // Connected marketplace or Shopify tile
+  const tile = (
+    <s-box padding="base" borderWidth="base" borderRadius="base">
       <s-stack direction="block" gap="small">
         <s-stack direction="inline" gap="small" alignItems="center">
           <s-icon
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             type={icon as any}
-            tone={connected || isShopify ? "info" : undefined}
+            tone="info"
           />
           <s-text type="strong">{name}</s-text>
         </s-stack>
 
-        {/* No s-heading available in admin UI kit; inline style needed for count emphasis */}
         <s-text type="strong">
-          <span style={{ fontSize: "1.5rem" }}>
-            {connected || isShopify ? activeCount : "--"}
-          </span>
+          <span style={{ fontSize: "1.5rem" }}>{activeCount}</span>
         </s-text>
         <s-text color="subdued">
-          {isShopify
-            ? `${activeCount} product${activeCount !== 1 ? "s" : ""}`
-            : connected
-              ? `${activeCount} active`
-              : "\u00A0"}
+          {isShopify ? "products" : "active"}
         </s-text>
 
-        {isShopify && secondaryCount !== undefined && (
-          <s-text color="subdued">{secondaryCount} {secondaryLabel ?? "active"}</s-text>
+        {lastExportDate && !isShopify && (
+          <span style={{ color: "var(--s-color-text-subdued)" }}>
+            Last export: <RelativeTime date={lastExportDate} />
+          </span>
         )}
 
         {connected && !isShopify && (pendingCount > 0 || errorCount > 0) && (
@@ -71,16 +98,24 @@ export function MarketplaceTile({
 
         {isShopify ? (
           <s-badge tone="success">Source of truth</s-badge>
-        ) : connected ? (
-          <s-badge tone="success">Connected</s-badge>
         ) : (
-          <s-badge>Not connected</s-badge>
+          <s-badge tone="success">Connected</s-badge>
         )}
 
         {!isShopify && href && (
-          <s-link href={href}>{connected ? "Manage" : "Set up"} →</s-link>
+          <s-text color="subdued">Manage →</s-text>
         )}
       </s-stack>
     </s-box>
   );
+
+  if (!isShopify && href) {
+    return (
+      <Link to={href} style={{ textDecoration: "none", color: "inherit" }}>
+        {tile}
+      </Link>
+    );
+  }
+
+  return tile;
 }

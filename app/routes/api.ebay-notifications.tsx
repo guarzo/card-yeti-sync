@@ -6,10 +6,6 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
  * Required by eBay for all Developer Program applications (GDPR compliance).
  * GET handles the challenge/response handshake for endpoint validation.
  * POST receives account deletion notifications.
- *
- * Cross-channel delisting on eBay sale is handled by the Shopify orders/create
- * webhook instead — eBay orders sync to Shopify via Marketplace Connector,
- * which triggers our webhook handler.
  */
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -21,7 +17,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   const verificationToken = process.env.EBAY_VERIFICATION_TOKEN ?? "";
-  const endpoint = process.env.EBAY_NOTIFICATION_ENDPOINT ?? url.origin + url.pathname;
+  const endpoint =
+    process.env.EBAY_NOTIFICATION_ENDPOINT ?? url.origin + url.pathname;
 
   const encoder = new TextEncoder();
   const data = encoder.encode(challengeCode + verificationToken + endpoint);
@@ -42,15 +39,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   const metadata = payload.metadata as Record<string, unknown> | undefined;
-  const topic = typeof metadata?.topic === "string" ? metadata.topic : "";
+  const topic = typeof metadata?.topic === "string" ? metadata.topic : "unknown";
+  console.log(`eBay notification: ${topic}`);
 
-  console.log(`eBay notification received: ${topic}`);
-
-  if (topic === "MARKETPLACE.ACCOUNT_DELETION") {
-    // Required by eBay — acknowledge receipt. Account data cleanup happens
-    // via the Shopify app/uninstalled webhook when the merchant uninstalls.
-    console.log("  Account deletion notification acknowledged");
-  }
-
+  // Acknowledge all notifications with 200.
+  // Account data cleanup is handled via Shopify app/uninstalled webhook.
   return new Response("OK", { status: 200 });
 };

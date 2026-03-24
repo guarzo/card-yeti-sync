@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect } from "react";
 import type {
   ActionFunctionArgs,
   HeadersFunction,
@@ -10,130 +10,85 @@ import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import db from "../db.server";
 import { fetchProductTypeCounts } from "../lib/graphql-queries.server";
-import { ConnectionCard } from "../components/ConnectionCard";
 import { StatCard } from "../components/StatCard";
 import { RelativeTime } from "../components/RelativeTime";
-import { BulkApproveModal } from "../components/dashboard/BulkApproveModal";
-import { isPricingApiConfigured } from "../lib/pricing-api.server";
-import { fetchAndCreatePriceSuggestions } from "../lib/fetch-price-suggestions.server";
-import { approvePriceSuggestion } from "../lib/approve-price.server";
-import type { PriceSuggestion } from "../types/dashboard";
+import { getAllProducts } from "../lib/shopify-helpers.server";
+import { generateHelixCSV } from "../lib/mappers/helix-mapper";
+import { downloadCSV } from "../lib/csv-download";
+import { generatePricesCSV } from "./api.prices";
+
+interface ExportHistoryEntry {
+  createdAt: string;
+  mode: string;
+  productCount: number;
+}
 
 interface LoaderData {
-  connected: boolean;
-  listingCount: number;
-  totalProducts: number;
   gradedCount: number;
-  rawCount: number;
   lastExportDate: string | null;
-  lastPriceUpdateDate: string | null;
-  pricingApiConfigured: boolean;
-  pendingSuggestions: PriceSuggestion[];
-  pendingCount: number;
-  lastFetchDate: string | null;
+  productTypes: Array<{ type: string; count: number }>;
+  recentExports: ExportHistoryEntry[];
 }
 
 export const meta: MetaFunction = () => [{ title: "Helix | Card Yeti Sync" }];
+
+function isExportableType(type: string): boolean {
+  const lower = type.toLowerCase();
+  return lower.includes("graded") || lower.includes("slab");
+}
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
   const shop = session.shop;
 
-  const account = await db.marketplaceAccount.findUnique({
-    where: {
-      shopId_marketplace: { shopId: shop, marketplace: "helix" },
-    },
-  });
+  const [productData, lastExport, recentExportLogs] = await Promise.all([
+    fetchProductTypeCounts(admin),
+    db.syncLog.findFirst({
+      where: { shopId: shop, marketplace: "helix", action: "list" },
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true, details: true },
+    }),
+    db.syncLog.findMany({
+      where: { shopId: shop, marketplace: "helix", action: "list" },
+      orderBy: { createdAt: "desc" },
+      take: 5,
+      select: { createdAt: true, details: true },
+    }),
+  ]);
 
-  const listingCount = await db.marketplaceListing.count({
-    where: { shopId: shop, marketplace: "helix", status: "active" },
-  });
-
-  const { totalProducts, typeCounts } = await fetchProductTypeCounts(admin);
+  const { typeCounts } = productData;
 
   let gradedCount = 0;
-  let rawCount = 0;
   for (const { type, count } of typeCounts) {
-    const lower = type.toLowerCase();
-    if (lower.includes("graded") || lower.includes("slab")) {
+    if (isExportableType(type)) {
       gradedCount += count;
-    } else if (lower.includes("raw") || lower.includes("single")) {
-      rawCount += count;
     }
   }
 
-  const lastExport = await db.syncLog.findFirst({
-    where: { shopId: shop, marketplace: "helix", action: "list" },
-    orderBy: { createdAt: "desc" },
-    select: { createdAt: true, details: true },
-  });
-
-  const lastPriceUpdate = await db.syncLog.findFirst({
-    where: { shopId: shop, action: "price_update" },
-    orderBy: { createdAt: "desc" },
-    select: { createdAt: true },
-  });
-
-  // Smart Pricing data
-  const pendingSuggestionsRaw = await db.priceSuggestion.findMany({
-    where: { shopId: shop, status: "pending", source: "api" },
-    orderBy: { createdAt: "desc" },
-  });
-
-  // Batch-fetch product titles for all suggestions in a single GraphQL call
-  const productIds = [
-    ...new Set(pendingSuggestionsRaw.map((s) => s.shopifyProductId)),
-  ];
-  const titleMap = new Map<string, string>();
-  if (productIds.length > 0) {
-    try {
-      const response = await admin.graphql(
-        `query ($ids: [ID!]!) { nodes(ids: $ids) { ... on Product { id title } } }`,
-        { variables: { ids: productIds } },
-      );
-      const data = await response.json();
-      for (const node of data.data?.nodes ?? []) {
-        if (node?.id && node?.title) {
-          titleMap.set(node.id, node.title);
-        }
+  const recentExports: ExportHistoryEntry[] = recentExportLogs.map((log) => {
+    let mode = "all";
+    let exportProductCount = 0;
+    if (log.details) {
+      try {
+        const parsed = JSON.parse(log.details);
+        mode = parsed.mode ?? "all";
+        exportProductCount = parsed.productCount ?? 0;
+      } catch (err) {
+        console.error("Failed to parse syncLog.details for export at %s: %s", log.createdAt, log.details, err);
       }
-    } catch (err) {
-      console.error("Failed to fetch product titles for price suggestions:", err);
-      // Fall back to using product IDs as titles
     }
-  }
-
-  const pendingSuggestions: PriceSuggestion[] = pendingSuggestionsRaw.map(
-    (s) => ({
-      id: s.id,
-      shopifyProductId: s.shopifyProductId,
-      currentPrice: s.currentPrice.toString(),
-      suggestedPrice: s.suggestedPrice.toString(),
-      reason: s.reason,
-      productTitle: titleMap.get(s.shopifyProductId) ?? s.shopifyProductId,
-      source: s.source,
-      certNumber: s.certNumber ?? undefined,
-    }),
-  );
-
-  const lastFetch = await db.syncLog.findFirst({
-    where: { shopId: shop, marketplace: "helix", action: "price_fetch" },
-    orderBy: { createdAt: "desc" },
-    select: { createdAt: true },
+    return {
+      createdAt: log.createdAt.toISOString(),
+      mode,
+      productCount: exportProductCount,
+    };
   });
 
   return {
-    connected: !!account,
-    listingCount,
-    totalProducts,
     gradedCount,
-    rawCount,
     lastExportDate: lastExport?.createdAt?.toISOString() ?? null,
-    lastPriceUpdateDate: lastPriceUpdate?.createdAt?.toISOString() ?? null,
-    pricingApiConfigured: isPricingApiConfigured(),
-    pendingSuggestions,
-    pendingCount: pendingSuggestions.length,
-    lastFetchDate: lastFetch?.createdAt?.toISOString() ?? null,
+    productTypes: typeCounts,
+    recentExports,
   } satisfies LoaderData;
 };
 
@@ -143,75 +98,74 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const formData = await request.formData();
   const intent = formData.get("intent");
 
-  if (intent === "fetch-prices") {
-    try {
-      const result = await fetchAndCreatePriceSuggestions(admin, shop);
-      return {
-        fetchResult: result,
-      };
-    } catch (err) {
-      return {
-        error: err instanceof Error ? err.message : "Failed to fetch prices",
-      };
-    }
-  }
+  if (intent === "export-csv") {
+    const mode = (formData.get("mode") as string) ?? "all";
 
-  if (intent === "approve-price") {
-    const suggestionId = formData.get("suggestionId") as string;
-    if (!suggestionId) return { error: "Missing suggestion ID" };
-    try {
-      const result = await approvePriceSuggestion(admin, shop, suggestionId);
-      if (!result.success) return { error: result.error };
-      return { approved: 1 };
-    } catch (err) {
-      return { success: false, error: String(err) };
-    }
-  }
+    const products = await getAllProducts(admin, { query: "status:active" });
+    let exportProducts = products.filter((p) => p.variant !== null);
 
-  if (intent === "bulk-approve-prices") {
-    const suggestionIds = formData.getAll("suggestionIds") as string[];
-    if (suggestionIds.length === 0) return { error: "No suggestions selected" };
-
-    const BATCH_SIZE = 5;
-    const results: Array<{ id: string; success: boolean; error?: string }> = [];
-    for (let i = 0; i < suggestionIds.length; i += BATCH_SIZE) {
-      const batch = suggestionIds.slice(i, i + BATCH_SIZE);
-      try {
-        const batchResults = await Promise.all(
-          batch.map((id) => approvePriceSuggestion(admin, shop, id)),
-        );
-        results.push(...batchResults);
-      } catch (err) {
-        results.push(
-          ...batch.map((id) => ({
-            id,
-            success: false,
-            error: String(err),
-          })),
-        );
-      }
+    if (mode === "new") {
+      const exportedIds = await db.marketplaceListing.findMany({
+        where: { shopId: shop, marketplace: "helix" },
+        select: { shopifyProductId: true },
+      });
+      const exportedSet = new Set(exportedIds.map((e) => e.shopifyProductId));
+      exportProducts = exportProducts.filter(
+        (p) => !exportedSet.has(p.product.id as string),
+      );
     }
 
-    const failures = results.filter((r) => !r.success);
-    if (failures.length > 0) {
-      return {
-        partialSuccess: true,
-        approved: results.filter((r) => r.success).length,
-        failed: failures.length,
-      };
-    }
-    return { approved: results.length };
-  }
+    const csvData = exportProducts.map((p) => ({
+      product: p.product as { id: string; title: string; descriptionHtml?: string; productType?: string },
+      metafields: p.metafields,
+      variant: p.variant as {
+        price: string;
+        compareAtPrice: string | null;
+        sku: string;
+        inventoryQuantity: number;
+      },
+    }));
 
-  if (intent === "reject-price") {
-    const suggestionId = formData.get("suggestionId") as string;
-    if (!suggestionId) return { error: "Missing suggestion ID" };
-    const { count } = await db.priceSuggestion.updateMany({
-      where: { id: suggestionId, shopId: shop, status: "pending" },
-      data: { status: "rejected", reviewedAt: new Date() },
+    const csv = generateHelixCSV(csvData);
+
+    // Ensure a MarketplaceAccount exists for helix (CSV-only, no real token)
+    await db.marketplaceAccount.upsert({
+      where: { shopId_marketplace: { shopId: shop, marketplace: "helix" } },
+      update: {},
+      create: { shopId: shop, marketplace: "helix", accessToken: "csv-export-only" },
     });
-    if (count === 0) return { error: "Suggestion not found or already reviewed" };
-    return { rejected: 1 };
+
+    // Persist exported product IDs so "Export New Only" excludes them next time
+    if (csvData.length > 0) {
+      await db.marketplaceListing.createMany({
+        data: csvData.map((p) => ({
+          shopId: shop,
+          shopifyProductId: p.product.id,
+          marketplace: "helix",
+          status: "active",
+        })),
+        skipDuplicates: true,
+      });
+    }
+
+    await db.syncLog.create({
+      data: {
+        shopId: shop,
+        marketplace: "helix",
+        action: "list",
+        status: "success",
+        details: JSON.stringify({ type: "csv_export", mode, productCount: csvData.length }),
+      },
+    });
+
+    const timestamp = new Date().toISOString().slice(0, 10);
+    return { csv, filename: `helix-export-${timestamp}.csv`, productCount: csvData.length };
+  }
+
+  if (intent === "download-prices") {
+    const csv = await generatePricesCSV(admin);
+    const timestamp = new Date().toISOString().slice(0, 10);
+    return { csv, filename: `prices-${timestamp}.csv` };
   }
 
   return null;
@@ -219,427 +173,202 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
 export default function HelixSettings() {
   const {
-    connected,
-    listingCount,
-    totalProducts,
     gradedCount,
-    rawCount,
     lastExportDate,
-    lastPriceUpdateDate,
-    pricingApiConfigured,
-    pendingSuggestions,
-    pendingCount,
-    lastFetchDate,
+    productTypes,
+    recentExports,
   } = useLoaderData<typeof loader>();
 
-  const fetchPricesFetcher = useFetcher();
-  const isFetching = fetchPricesFetcher.state === "submitting";
-  const [bulkModalOpen, setBulkModalOpen] = useState(false);
+  const exportAllFetcher = useFetcher();
+  const exportNewFetcher = useFetcher();
+  const pricesFetcher = useFetcher();
+  const isExporting =
+    exportAllFetcher.state === "submitting" ||
+    exportNewFetcher.state === "submitting" ||
+    pricesFetcher.state === "submitting";
 
-  const fetchResult = (fetchPricesFetcher.data as Record<string, unknown>)?.fetchResult as
-    | { created: number; updated: number; notFound: number; total: number }
-    | undefined;
-  const fetchError = (fetchPricesFetcher.data as Record<string, unknown>)?.error as
-    | string
-    | undefined;
+  const exportAllResult = exportAllFetcher.data as { csv?: string; filename?: string; productCount?: number } | null;
+  const exportNewResult = exportNewFetcher.data as { csv?: string; filename?: string; productCount?: number } | null;
+
+  // Trigger CSV download when each export action completes
+  useEffect(() => {
+    if (exportAllResult?.csv && exportAllResult?.filename) downloadCSV(exportAllResult.csv, exportAllResult.filename);
+  }, [exportAllResult]);
+
+  useEffect(() => {
+    if (exportNewResult?.csv && exportNewResult?.filename) downloadCSV(exportNewResult.csv, exportNewResult.filename);
+  }, [exportNewResult]);
+
+  useEffect(() => {
+    const data = pricesFetcher.data as { csv?: string; filename?: string } | null;
+    if (data?.csv && data?.filename) downloadCSV(data.csv, data.filename);
+  }, [pricesFetcher.data]);
 
   return (
     <s-page heading="Helix">
-      {/* Status Banner */}
-      <s-banner tone="info">
-        Helix integration is being actively developed. Connect your account as
-        soon as API access becomes available.
-      </s-banner>
+      {/* Success banners */}
+      {exportAllResult?.productCount != null && (
+        <s-banner tone="success" dismissible>
+          Exported {exportAllResult.productCount} products to CSV.
+        </s-banner>
+      )}
+      {exportNewResult?.productCount != null && (
+        <s-banner tone="success" dismissible>
+          Exported {exportNewResult.productCount} new products to CSV.
+        </s-banner>
+      )}
 
-      {/* Connection */}
-      <s-section heading="Connection">
-        <ConnectionCard
-          marketplace="Helix"
-          connected={connected}
-          icon="bolt"
-          connectDescription="Link your Helix seller account to sync your Pokemon card inventory with the lowest marketplace fees (4.9%)."
-          connectAction={
-            <s-button variant="primary" disabled>
-              Connect Helix Account
-            </s-button>
-          }
-          connectFooter={
-            <s-paragraph color="subdued">
-              Available when Helix opens their Seller API.
-            </s-paragraph>
-          }
-        >
-          <s-stack direction="inline" gap="base">
-            <StatCard label="Active Listings" value={listingCount} />
-          </s-stack>
-        </ConnectionCard>
+      {/* Section 1: Overview */}
+      <s-section heading="Overview">
+        <s-grid gridTemplateColumns="repeat(auto-fit, minmax(140px, 1fr))" gap="base">
+          <s-grid-item>
+            <StatCard
+              label="Exportable Products"
+              value={gradedCount}
+              tone="success"
+              description="Graded cards & slabs"
+            />
+          </s-grid-item>
+          <s-grid-item>
+            <StatCard
+              label="Product Types"
+              value={productTypes.length}
+              tone="info"
+            />
+          </s-grid-item>
+          <s-grid-item>
+            <StatCard
+              label="Last Export"
+              value={
+                lastExportDate ? (
+                  <RelativeTime date={lastExportDate} />
+                ) : (
+                  "Never"
+                )
+              }
+            />
+          </s-grid-item>
+        </s-grid>
       </s-section>
 
-      {/* CSV Export */}
-      <s-section heading="CSV Export">
+      {/* Section 2: Product Breakdown */}
+      <s-section heading="Product Breakdown">
         <s-paragraph color="subdued">
-          Generate Helix-compatible CSVs for bulk upload. Includes rich
-          descriptions built from your card metafields.
+          Product types in your Shopify store. Types containing &quot;Graded&quot; or &quot;Slab&quot; are included in Helix exports.
         </s-paragraph>
+        {productTypes.length === 0 ? (
+          <s-box padding="large">
+            <s-text color="subdued">No products found. Import or create products in Shopify to get started.</s-text>
+          </s-box>
+        ) : (
+          <s-table>
+            <s-table-header-row>
+              <s-table-header>Type</s-table-header>
+              <s-table-header>Count</s-table-header>
+              <s-table-header>Exportable</s-table-header>
+            </s-table-header-row>
+            <s-table-body>
+              {productTypes.map(({ type, count }) => (
+                <s-table-row key={type}>
+                  <s-table-cell>
+                    <s-text type="strong">{type}</s-text>
+                  </s-table-cell>
+                  <s-table-cell>{count}</s-table-cell>
+                  <s-table-cell>
+                    <s-badge tone={isExportableType(type) ? "success" : undefined}>
+                      {isExportableType(type) ? "Yes" : "No"}
+                    </s-badge>
+                  </s-table-cell>
+                </s-table-row>
+              ))}
+            </s-table-body>
+          </s-table>
+        )}
+      </s-section>
 
+      {/* Section 3: Export */}
+      <s-section heading="Export">
         <s-box padding="base" borderWidth="base" borderRadius="base">
           <s-stack direction="block" gap="base">
-            <s-grid gap="base">
-              <s-grid-item>
-                <StatCard
-                  label="Last Export"
-                  value={
-                    lastExportDate ? (
-                      <RelativeTime date={lastExportDate} />
-                    ) : (
-                      "Never"
-                    )
-                  }
-                />
-              </s-grid-item>
-              <s-grid-item>
-                <StatCard label="Format" value="Helix Seller CSV" />
-              </s-grid-item>
-            </s-grid>
+            <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
+              <s-stack direction="block" gap="small">
+                <s-text type="strong">Export All Products</s-text>
+                <s-text color="subdued">Full Helix-compatible CSV of all graded products.</s-text>
+              </s-stack>
+              <exportAllFetcher.Form method="post">
+                <input type="hidden" name="intent" value="export-csv" />
+                <input type="hidden" name="mode" value="all" />
+                <s-button variant="primary" type="submit" disabled={isExporting || undefined}>
+                  {exportAllFetcher.state === "submitting" ? "Exporting..." : "Export All"}
+                </s-button>
+              </exportAllFetcher.Form>
+            </s-stack>
 
             <s-divider />
 
-            <s-stack direction="inline" gap="base" alignItems="center">
-              <a href="/api/export-helix?mode=all" download>
-                <s-button variant="primary">Export All Products</s-button>
-              </a>
-              <a href="/api/export-helix?mode=new" download>
-                <s-button>Export New Only</s-button>
-              </a>
-            </s-stack>
-          </s-stack>
-        </s-box>
-      </s-section>
-
-      {/* Price Management */}
-      <s-section heading="Price Management">
-        <s-paragraph color="subdued">
-          Download current prices as a CSV or upload updated prices in bulk.
-        </s-paragraph>
-
-        <s-box padding="base" borderWidth="base" borderRadius="base">
-          <s-stack direction="block" gap="base">
-            <s-stack direction="inline" gap="base" alignItems="center">
-              <a href="/api/prices" download>
-                <s-button variant="primary">Download Prices</s-button>
-              </a>
-            </s-stack>
-
-            {lastPriceUpdateDate && (
-              <s-stack direction="inline" gap="small" alignItems="center">
-                <s-text color="subdued">Last price update:</s-text>
-                <RelativeTime date={lastPriceUpdateDate} />
+            <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
+              <s-stack direction="block" gap="small">
+                <s-text type="strong">Export New Only</s-text>
+                <s-text color="subdued">Products not previously exported to Helix.</s-text>
               </s-stack>
-            )}
-            {!lastPriceUpdateDate && (
-              <s-text color="subdued">No price updates recorded yet.</s-text>
-            )}
-          </s-stack>
-        </s-box>
-      </s-section>
-
-      {/* Smart Pricing */}
-      <s-section heading="Smart Pricing">
-        <s-paragraph color="subdued">
-          Fetch suggested prices for your graded inventory based on recent
-          market data. Only products with certification numbers are eligible.
-        </s-paragraph>
-
-        <s-box padding="base" borderWidth="base" borderRadius="base">
-          <s-stack direction="block" gap="base">
-            {!pricingApiConfigured && (
-              <s-banner tone="info">
-                Set the <s-text type="strong">PRICING_API_URL</s-text> and{" "}
-                <s-text type="strong">PRICING_API_KEY</s-text> environment
-                variables to enable smart pricing.
-              </s-banner>
-            )}
-
-            {pricingApiConfigured && (
-              <>
-                <s-stack direction="inline" gap="base" alignItems="center">
-                  <fetchPricesFetcher.Form method="post">
-                    <input type="hidden" name="intent" value="fetch-prices" />
-                    <s-button
-                      variant="primary"
-                      type="submit"
-                      disabled={isFetching || undefined}
-                    >
-                      {isFetching
-                        ? "Fetching..."
-                        : "Fetch Price Suggestions"}
-                    </s-button>
-                  </fetchPricesFetcher.Form>
-
-                  {lastFetchDate && (
-                    <s-stack direction="inline" gap="small" alignItems="center">
-                      <s-text color="subdued">Last fetch:</s-text>
-                      <RelativeTime date={lastFetchDate} />
-                    </s-stack>
-                  )}
-                </s-stack>
-
-                {fetchResult && (
-                  <s-banner tone="success">
-                    Found pricing for {fetchResult.created + fetchResult.updated}{" "}
-                    of {fetchResult.total} graded products.
-                    {fetchResult.notFound > 0 &&
-                      ` ${fetchResult.notFound} had no pricing data.`}
-                  </s-banner>
-                )}
-
-                {fetchError && (
-                  <s-banner tone="critical">{fetchError}</s-banner>
-                )}
-              </>
-            )}
-          </s-stack>
-        </s-box>
-
-        {/* Pending Suggestions Table */}
-        {pendingCount > 0 && (
-          <s-box
-            padding="base"
-            borderWidth="base"
-            borderRadius="base"
-          >
-            <s-stack direction="block" gap="base">
-              <s-stack direction="inline" gap="base" alignItems="center">
-                <s-text type="strong">
-                  {pendingCount} pending suggestion
-                  {pendingCount !== 1 ? "s" : ""}
-                </s-text>
-                <s-button
-                  variant="primary"
-                  onClick={() => setBulkModalOpen(true)}
-                >
-                  Review All
+              <exportNewFetcher.Form method="post">
+                <input type="hidden" name="intent" value="export-csv" />
+                <input type="hidden" name="mode" value="new" />
+                <s-button type="submit" disabled={isExporting || undefined}>
+                  {exportNewFetcher.state === "submitting" ? "Exporting..." : "Export New"}
                 </s-button>
+              </exportNewFetcher.Form>
+            </s-stack>
+
+            <s-divider />
+
+            <s-stack direction="inline" gap="base" alignItems="center" justifyContent="space-between">
+              <s-stack direction="block" gap="small">
+                <s-text type="strong">Download Prices</s-text>
+                <s-text color="subdued">Price list CSV for all active products.</s-text>
               </s-stack>
+              <pricesFetcher.Form method="post">
+                <input type="hidden" name="intent" value="download-prices" />
+                <s-button type="submit" disabled={isExporting || undefined}>
+                  {pricesFetcher.state === "submitting" ? "Downloading..." : "Download"}
+                </s-button>
+              </pricesFetcher.Form>
+            </s-stack>
+          </s-stack>
+        </s-box>
+      </s-section>
 
-              <s-divider />
-
-              {pendingSuggestions.map((suggestion) => (
-                <SuggestionRow
-                  key={suggestion.id}
-                  suggestion={suggestion}
-                />
+      {/* Section 4: Export History */}
+      <s-section heading="Export History">
+        {recentExports.length === 0 ? (
+          <s-box padding="large">
+            <s-text color="subdued">No exports yet. Use the buttons above to generate your first CSV.</s-text>
+          </s-box>
+        ) : (
+          <s-table>
+            <s-table-header-row>
+              <s-table-header>Date</s-table-header>
+              <s-table-header>Type</s-table-header>
+              <s-table-header>Products</s-table-header>
+            </s-table-header-row>
+            <s-table-body>
+              {recentExports.map((exp, idx) => (
+                <s-table-row key={`${exp.createdAt}-${exp.mode}-${idx}`}>
+                  <s-table-cell>
+                    <RelativeTime date={exp.createdAt} />
+                  </s-table-cell>
+                  <s-table-cell>
+                    <s-badge>{exp.mode === "new" ? "New Only" : "Full Export"}</s-badge>
+                  </s-table-cell>
+                  <s-table-cell>{exp.productCount}</s-table-cell>
+                </s-table-row>
               ))}
-            </s-stack>
-          </s-box>
-        )}
-
-        {pricingApiConfigured && pendingCount === 0 && !fetchResult && (
-          <s-text color="subdued">
-            No pending price suggestions. Use the button above to fetch
-            suggestions for your graded inventory.
-          </s-text>
+            </s-table-body>
+          </s-table>
         )}
       </s-section>
 
-      {/* Bulk Approve Modal */}
-      <BulkApproveModal
-        suggestions={pendingSuggestions}
-        open={bulkModalOpen}
-        onClose={() => setBulkModalOpen(false)}
-      />
-
-      {/* Why Helix? */}
-      <s-section heading="Why Helix?">
-        <s-grid gap="base">
-          <s-grid-item>
-            <s-box padding="base" borderWidth="base" borderRadius="base">
-              <s-stack direction="block" gap="small">
-                <s-icon type="cash-dollar" tone="success" />
-                <s-text type="strong">4.9% seller fees</s-text>
-                <s-paragraph color="subdued">
-                  vs 12.9% on eBay. Keep more of every sale.
-                </s-paragraph>
-              </s-stack>
-            </s-box>
-          </s-grid-item>
-          <s-grid-item>
-            <s-box padding="base" borderWidth="base" borderRadius="base">
-              <s-stack direction="block" gap="small">
-                <s-icon type="chart-line" tone="info" />
-                <s-text type="strong">Real-time pricing</s-text>
-                <s-paragraph color="subdued">
-                  Live bid/ask market data and AI-powered price forecasting.
-                </s-paragraph>
-              </s-stack>
-            </s-box>
-          </s-grid-item>
-          <s-grid-item>
-            <s-box padding="base" borderWidth="base" borderRadius="base">
-              <s-stack direction="block" gap="small">
-                <s-icon type="transfer" tone="info" />
-                <s-text type="strong">Full sync</s-text>
-                <s-paragraph color="subdued">
-                  Automatic inventory sync with cross-channel delisting.
-                </s-paragraph>
-              </s-stack>
-            </s-box>
-          </s-grid-item>
-          <s-grid-item>
-            <s-box padding="base" borderWidth="base" borderRadius="base">
-              <s-stack direction="block" gap="small">
-                <s-icon type="list-bulleted" tone="info" />
-                <s-text type="strong">Structured data</s-text>
-                <s-paragraph color="subdued">
-                  Rich card metadata: set, number, grade, cert, population.
-                </s-paragraph>
-              </s-stack>
-            </s-box>
-          </s-grid-item>
-        </s-grid>
-      </s-section>
-
-      {/* Integration Roadmap */}
-      <s-section heading="Integration Roadmap">
-        <s-stack direction="block" gap="base">
-          <s-box padding="base" borderWidth="base" borderRadius="base">
-            <s-stack direction="inline" gap="base" alignItems="center">
-              <s-badge tone="info">Phase 1</s-badge>
-              <s-stack direction="block" gap="small">
-                <s-text type="strong">Bulk Import</s-text>
-                <s-text color="subdued">
-                  One-click sync of all active inventory to Helix. OAuth
-                  connection, bulk listing creation.
-                </s-text>
-              </s-stack>
-            </s-stack>
-          </s-box>
-          <s-box padding="base" borderWidth="base" borderRadius="base">
-            <s-stack direction="inline" gap="base" alignItems="center">
-              <s-badge>Phase 2</s-badge>
-              <s-stack direction="block" gap="small">
-                <s-text type="strong">Real-Time Sync</s-text>
-                <s-text color="subdued">
-                  Webhook-driven updates. Product changes in Shopify auto-update
-                  on Helix. Inventory delisting on sale.
-                </s-text>
-              </s-stack>
-            </s-stack>
-          </s-box>
-          <s-box padding="base" borderWidth="base" borderRadius="base">
-            <s-stack direction="inline" gap="base" alignItems="center">
-              <s-badge>Phase 3</s-badge>
-              <s-stack direction="block" gap="small">
-                <s-text type="strong">Bidirectional + Pricing</s-text>
-                <s-text color="subdued">
-                  Helix sales trigger cross-channel delisting. Pull Helix market
-                  data to inform pricing across all channels.
-                </s-text>
-              </s-stack>
-            </s-stack>
-          </s-box>
-        </s-stack>
-      </s-section>
-
-      {/* Inventory Readiness */}
-      <s-section heading="Inventory Readiness">
-        <s-paragraph color="subdued">
-          Your Shopify products that will sync to Helix when connected.
-        </s-paragraph>
-        <s-grid gap="base">
-          <s-grid-item>
-            <StatCard
-              label="Total Products"
-              value={totalProducts}
-              background="subdued"
-            />
-          </s-grid-item>
-          <s-grid-item>
-            <StatCard
-              label="Graded Cards"
-              value={gradedCount}
-              description="Highest demand on Helix"
-              background="subdued"
-            />
-          </s-grid-item>
-          <s-grid-item>
-            <StatCard
-              label="Raw Singles"
-              value={rawCount}
-              background="subdued"
-            />
-          </s-grid-item>
-        </s-grid>
-      </s-section>
     </s-page>
-  );
-}
-
-function SuggestionRow({ suggestion }: { suggestion: PriceSuggestion }) {
-  const approveFetcher = useFetcher();
-  const rejectFetcher = useFetcher();
-  const isApproving = approveFetcher.state === "submitting";
-  const isRejecting = rejectFetcher.state === "submitting";
-  const isDone =
-    (approveFetcher.data as Record<string, unknown>)?.approved ||
-    (rejectFetcher.data as Record<string, unknown>)?.rejected;
-
-  const approveError = (approveFetcher.data as Record<string, unknown>)?.error as
-    | string
-    | undefined;
-  const rejectError = (rejectFetcher.data as Record<string, unknown>)?.error as
-    | string
-    | undefined;
-  const inlineError = approveError || rejectError;
-
-  if (isDone) return null;
-
-  return (
-    <s-stack direction="inline" gap="base" alignItems="center">
-      <s-stack direction="block" gap="small">
-        <s-text type="strong">
-          {suggestion.productTitle ?? suggestion.shopifyProductId}
-        </s-text>
-        <s-text color="subdued">
-          ${suggestion.currentPrice} → ${suggestion.suggestedPrice}
-          {suggestion.certNumber && ` · Cert: ${suggestion.certNumber}`}
-        </s-text>
-        {inlineError && (
-          <s-text tone="critical">{inlineError}</s-text>
-        )}
-      </s-stack>
-      <s-stack direction="inline" gap="small">
-        <approveFetcher.Form method="post">
-          <input type="hidden" name="intent" value="approve-price" />
-          <input
-            type="hidden"
-            name="suggestionId"
-            value={suggestion.id}
-          />
-          <s-button
-            variant="primary"
-            type="submit"
-            disabled={isApproving || isRejecting || undefined}
-          >
-            {isApproving ? "..." : "Approve"}
-          </s-button>
-        </approveFetcher.Form>
-        <rejectFetcher.Form method="post">
-          <input type="hidden" name="intent" value="reject-price" />
-          <input
-            type="hidden"
-            name="suggestionId"
-            value={suggestion.id}
-          />
-          <s-button
-            type="submit"
-            disabled={isApproving || isRejecting || undefined}
-          >
-            {isRejecting ? "..." : "Reject"}
-          </s-button>
-        </rejectFetcher.Form>
-      </s-stack>
-    </s-stack>
   );
 }
 

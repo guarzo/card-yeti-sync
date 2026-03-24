@@ -161,6 +161,7 @@ export async function ebayApiCall(
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
+        "Content-Language": "en-US",
         "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
       },
       ...(body ? { body: JSON.stringify(body) } : {}),

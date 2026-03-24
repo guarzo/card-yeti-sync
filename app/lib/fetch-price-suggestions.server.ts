@@ -97,7 +97,27 @@ export async function fetchAndCreatePriceSuggestions(
       (result.suggestedPrice * (1 - discount)).toFixed(2),
     );
 
+    const currentPriceNum = parseFloat(productInfo.currentPrice);
     const existing = existingByProductId.get(productInfo.shopifyProductId);
+
+    // Skip when suggested price matches current price
+    if (suggestedPrice === currentPriceNum) {
+      if (existing) {
+        await db.priceSuggestion.update({
+          where: { id: existing.id },
+          data: {
+            status: "approved",
+            reviewedAt: new Date(),
+            currentPrice: currentPriceNum,
+            suggestedPrice,
+            certNumber: result.certNumber,
+            source: "api",
+          },
+        });
+      }
+      skipped++;
+      continue;
+    }
 
     if (existing) {
       await db.priceSuggestion.update({

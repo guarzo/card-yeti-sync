@@ -1,5 +1,12 @@
 import type { ReactNode } from "react";
 
+const TONE_COLORS: Record<string, string> = {
+  info: "#2563eb",
+  success: "#16a34a",
+  critical: "#dc2626",
+  caution: "#d97706",
+};
+
 interface StatCardProps {
   label: string;
   value: ReactNode;
@@ -7,6 +14,7 @@ interface StatCardProps {
   background?: "subdued";
   children?: ReactNode;
   href?: string;
+  tone?: "info" | "success" | "critical" | "caution" | "neutral";
 }
 
 export function StatCard({
@@ -16,23 +24,28 @@ export function StatCard({
   background,
   children,
   href,
+  tone,
 }: StatCardProps) {
+  const borderColor = tone && tone !== "neutral" ? TONE_COLORS[tone] : undefined;
+
   const card = (
-    <s-box
-      padding="base"
-      borderWidth="base"
-      borderRadius="base"
-      background={background}
-    >
-      <s-stack direction="block" gap="small">
-        <s-text color="subdued">{label}</s-text>
-        <s-text type="strong">{value}</s-text>
-        {description && (
-          <s-paragraph color="subdued">{description}</s-paragraph>
-        )}
-        {children}
-      </s-stack>
-    </s-box>
+    <div style={borderColor ? { borderLeft: `3px solid ${borderColor}`, borderRadius: "8px" } : undefined}>
+      <s-box
+        padding="base"
+        borderWidth="base"
+        borderRadius="base"
+        background={background}
+      >
+        <s-stack direction="block" gap="small">
+          <s-text color="subdued">{label}</s-text>
+          <s-text type="strong">{value}</s-text>
+          {description && (
+            <s-paragraph color="subdued">{description}</s-paragraph>
+          )}
+          {children}
+        </s-stack>
+      </s-box>
+    </div>
   );
 
   if (href) {

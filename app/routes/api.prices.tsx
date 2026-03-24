@@ -88,11 +88,12 @@ async function fetchAllProductNodes(
 }
 
 /**
- * GET: Download current prices as CSV.
+ * Generate a prices CSV string from Shopify product data.
+ * Exported so route actions can call it within the admin auth context.
  */
-export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
-
+export async function generatePricesCSV(
+  admin: { graphql: (query: string, options?: { variables: Record<string, unknown> }) => Promise<Response> },
+): Promise<string> {
   const nodes = await fetchAllProductNodes(admin);
   const products = nodes.map((p) => {
     const v = p.variants.edges[0]?.node;
@@ -109,8 +110,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     };
   });
 
-  const headers = ["Product ID", "Variant ID", "Handle", "Title", "SKU", "Status", "Inventory", "Price", "Cert Number"];
-  const lines = [headers.join(",")];
+  const csvHeaders = ["Product ID", "Variant ID", "Handle", "Title", "SKU", "Status", "Inventory", "Price", "Cert Number"];
+  const lines = [csvHeaders.join(",")];
 
   for (const p of products) {
     lines.push([
@@ -120,8 +121,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     ].join(","));
   }
 
+  return lines.join("\n") + "\n";
+}
+
+/**
+ * GET: Download current prices as CSV.
+ */
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const { admin } = await authenticate.admin(request);
+  const csv = await generatePricesCSV(admin);
   const timestamp = new Date().toISOString().slice(0, 10);
-  return new Response(lines.join("\n") + "\n", {
+  return new Response(csv, {
     headers: {
       "Content-Type": "text/csv",
       "Content-Disposition": `attachment; filename="prices-${timestamp}.csv"`,

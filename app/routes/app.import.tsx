@@ -204,8 +204,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     if (selectedCards.length === 0) {
       return { error: "No valid cards to import" };
     }
-    const statusRaw = (formData.get("status") as string) || "active";
-    const status: "active" | "draft" = statusRaw === "draft" ? "draft" : "active";
+    const statusRaw = (formData.get("status") as string) || "draft";
+    const status: "active" | "draft" = statusRaw === "active" ? "active" : "draft";
     const rotateNewArrivals = formData.get("rotateNewArrivals") === "true";
 
     // Re-run dedup server-side so a tampered payload cannot bypass duplicate detection
@@ -284,7 +284,7 @@ export default function ImportPage() {
   const { pricingApiConfigured } = useLoaderData<LoaderData>();
   const [importMethod, setImportMethod] = useState<"csv" | "ebay">("csv");
   const [editedCards, setEditedCards] = useState<ParsedCard[] | null>(null);
-  const [status, setStatus] = useState("active");
+  const [status, setStatus] = useState<"active" | "draft">("draft");
   const [rotateNewArrivals, setRotateNewArrivals] = useState(true);
   const [resetCount, setResetCount] = useState(0);
 
@@ -325,9 +325,10 @@ export default function ImportPage() {
 
   const isParsing = parseFetcher.state === "submitting";
   const isCreating = createFetcher.state === "submitting";
+  const selectedNonDuplicates = parsedCards.filter((c) => c.selected && !c.isDuplicate);
 
   function handleSubmitImport() {
-    const selectedCards = parsedCards.filter((c) => c.selected && !c.isDuplicate);
+    const selectedCards = selectedNonDuplicates;
     if (selectedCards.length === 0) return;
 
     const formData = new FormData();
@@ -534,7 +535,7 @@ export default function ImportPage() {
                 Status:{" "}
                 <select
                   value={status}
-                  onChange={(e) => setStatus(e.target.value)}
+                  onChange={(e) => setStatus(e.target.value as "active" | "draft")}
                 >
                   <option value="active">Active</option>
                   <option value="draft">Draft</option>
@@ -542,6 +543,20 @@ export default function ImportPage() {
               </label>
             </s-stack>
           </s-section>
+
+          {/* Dry-run notice */}
+          <s-banner tone="info">
+            <s-stack direction="block" gap="small">
+              <s-text type="strong">Preview Mode</s-text>
+              <s-text>
+                Review the products above. Clicking Import will create{" "}
+                {selectedNonDuplicates.length}{" "}
+                real Shopify products as{" "}
+                <s-text type="strong">{status}</s-text>.
+                {status === "draft" && " Draft products won't be visible to customers until published."}
+              </s-text>
+            </s-stack>
+          </s-banner>
 
           {/* Actions */}
           <s-stack direction="inline" gap="base">
@@ -551,14 +566,13 @@ export default function ImportPage() {
               onClick={handleSubmitImport}
               disabled={
                 isCreating ||
-                parsedCards.filter((c) => c.selected && !c.isDuplicate)
-                  .length === 0 ||
+                selectedNonDuplicates.length === 0 ||
                 undefined
               }
             >
               {isCreating
                 ? "Importing..."
-                : `Import ${parsedCards.filter((c) => c.selected && !c.isDuplicate).length} Products`}
+                : `Import ${selectedNonDuplicates.length} Products as ${status === "draft" ? "Draft" : "Active"}`}
             </s-button>
           </s-stack>
         </s-stack>
