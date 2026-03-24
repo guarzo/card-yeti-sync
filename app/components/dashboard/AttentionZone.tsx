@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { MARKETPLACE_CONFIG, type MarketplaceKey } from "../../lib/marketplace-config";
 import type { MarketplaceInfo } from "../../types/dashboard";
 
@@ -16,12 +17,35 @@ export function AttentionZone({
     .filter(([, m]) => m.errorCount > 0)
     .map(([name]) => MARKETPLACE_CONFIG[name as MarketplaceKey]?.href ?? `/app/${name}`)[0];
 
-  const hasBanners = totalErrors > 0 || pendingPriceReviews > 0;
+  const expiringTokens = useMemo(() => {
+    // eslint-disable-next-line react-hooks/purity -- Date.now() drift is irrelevant for a 7-day threshold
+    const now = Date.now();
+    return Object.entries(marketplaces)
+      .filter(([, m]) => {
+        if (!m.tokenExpiry) return false;
+        const daysUntilExpiry = (new Date(m.tokenExpiry).getTime() - now) / (1000 * 60 * 60 * 24);
+        return daysUntilExpiry < 7;
+      })
+      .map(([name]) => ({
+        name,
+        label: MARKETPLACE_CONFIG[name as MarketplaceKey]?.label ?? name,
+        href: MARKETPLACE_CONFIG[name as MarketplaceKey]?.href ?? `/app/${name}`,
+      }));
+  }, [marketplaces]);
+
+  const hasBanners = totalErrors > 0 || pendingPriceReviews > 0 || expiringTokens.length > 0;
 
   if (!hasBanners) return null;
 
   return (
     <>
+      {expiringTokens.map(({ name, label, href }) => (
+        <s-banner key={name} tone="warning" dismissible>
+          {label} token expires soon.{" "}
+          <s-link href={href}>Reconnect →</s-link>
+        </s-banner>
+      ))}
+
       {totalErrors > 0 && (
         <s-banner tone="critical" dismissible>
           {totalErrors} listing{totalErrors !== 1 ? "s" : ""} failed to sync.{" "}

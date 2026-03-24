@@ -204,8 +204,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     if (selectedCards.length === 0) {
       return { error: "No valid cards to import" };
     }
-    const statusRaw = (formData.get("status") as string) || "active";
-    const status: "active" | "draft" = statusRaw === "draft" ? "draft" : "active";
+    const statusRaw = (formData.get("status") as string) || "draft";
+    const status: "active" | "draft" = statusRaw === "active" ? "active" : "draft";
     const rotateNewArrivals = formData.get("rotateNewArrivals") === "true";
 
     // Re-run dedup server-side so a tampered payload cannot bypass duplicate detection

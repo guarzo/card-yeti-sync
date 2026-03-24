@@ -167,7 +167,7 @@ Card Yeti Sync has been deployed to the production Shopify store. This test plan
 
 4. **Open and validate the CSV**
    - Check headers match expected 21 columns:
-     ```
+     ```csv
      Category, Sub Category, Title, Description, Quantity, Type, Price,
      Shipping Profile, Offerable, Hazmat, Condition, Cost Per Item, SKU,
      Image URL 1, Image URL 2, ..., Image URL 8
@@ -176,7 +176,7 @@ Card Yeti Sync has been deployed to the production Shopify store. This test plan
      - **Category** = "Trading Card Games"
      - **Sub Category** = "Pokémon Cards"
      - **Title** matches Shopify product title
-     - **Description** includes pokemon name, set, grade, cert number
+     - **Description** includes Pokémon name, set, grade, cert number
      - **Price** is a whole dollar amount (rounded up from compareAtPrice)
      - **Shipping Profile** is one of: "4-8 oz", "0-1 oz", "9 oz-1 lb"
      - **Condition** = "Graded" for graded cards
@@ -220,7 +220,7 @@ Card Yeti Sync has been deployed to the production Shopify store. This test plan
 
 4. **Open and validate the CSV**
    - Check headers match expected 29 columns:
-     ```
+     ```csv
      Title, Description, Price (cents), Listing Type, Condition, Quantity,
      Image URL 1-4,
      Pokémon, Set Name, Card Number, Language, Year, Rarity,

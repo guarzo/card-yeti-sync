@@ -21,7 +21,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const stateResult = validateHmacStateStandalone(state);
   if (!stateResult.valid) {
     console.error("eBay OAuth state validation failed");
-    return redirect("/app/ebay?error=oauth_denied");
+    return new Response(
+      "eBay authorization failed: invalid state. Please return to your Shopify admin and try connecting again.",
+      { status: 400, headers: { "Content-Type": "text/plain" } },
+    );
   }
 
   const shop = stateResult.shop;

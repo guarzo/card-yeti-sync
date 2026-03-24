@@ -7,8 +7,6 @@ interface MarketplaceTileProps {
   connected: boolean;
   isShopify?: boolean;
   activeCount: number;
-  secondaryCount?: number;
-  secondaryLabel?: string;
   pendingCount?: number;
   errorCount?: number;
   href?: string;
@@ -40,9 +38,9 @@ export function MarketplaceTile({
           />
           <s-text type="strong">{name}</s-text>
           {lastExportDate && (
-            <s-text color="subdued">
+            <span style={{ color: "var(--s-color-text-subdued)" }}>
               Last export: <RelativeTime date={lastExportDate} />
-            </s-text>
+            </span>
           )}
           <s-button>{ctaLabel ?? `Set up ${name}`}</s-button>
         </s-stack>
@@ -80,9 +78,9 @@ export function MarketplaceTile({
         </s-text>
 
         {lastExportDate && !isShopify && (
-          <s-text color="subdued">
+          <span style={{ color: "var(--s-color-text-subdued)" }}>
             Last export: <RelativeTime date={lastExportDate} />
-          </s-text>
+          </span>
         )}
 
         {connected && !isShopify && (pendingCount > 0 || errorCount > 0) && (
@@ -103,7 +101,7 @@ export function MarketplaceTile({
         )}
 
         {!isShopify && href && (
-          <Link to={href}>Manage →</Link>
+          <s-text color="subdued">Manage →</s-text>
         )}
       </s-stack>
     </s-box>

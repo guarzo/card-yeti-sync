@@ -297,9 +297,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       data: {
         settings: {
           ...currentSettings,
-          fulfillmentPolicyId: formData.get("fulfillmentPolicyId")?.toString() ?? null,
-          paymentPolicyId: formData.get("paymentPolicyId")?.toString() ?? null,
-          returnPolicyId: formData.get("returnPolicyId")?.toString() ?? null,
+          fulfillmentPolicyId: formData.get("fulfillmentPolicyId")?.toString() || null,
+          paymentPolicyId: formData.get("paymentPolicyId")?.toString() || null,
+          returnPolicyId: formData.get("returnPolicyId")?.toString() || null,
         },
       },
     });
@@ -309,7 +309,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (intent === "toggle-shadow") {
     const currentSettings = (account.settings ?? {}) as Record<string, unknown>;
-    const newShadowMode = !(currentSettings.shadowMode !== false);
+    const newShadowMode = currentSettings.shadowMode === false;
     await db.marketplaceAccount.update({
       where: { id: account.id },
       data: {
@@ -620,10 +620,10 @@ export default function EbaySettings() {
                 <s-box padding="base" borderWidth="base" borderRadius="base">
                   <s-stack direction="block" gap="small">
                     <s-text type="strong">Fulfillment Policy</s-text>
-                    <select name="fulfillmentPolicyId" style={{ width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #ccc" }}>
+                    <select name="fulfillmentPolicyId" defaultValue={selectedPolicies.fulfillmentPolicyId || ""} style={{ width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #ccc" }}>
                       <option value="">— Select —</option>
                       {policies.fulfillment.map((p) => (
-                        <option key={p.id} value={p.id} selected={p.id === selectedPolicies.fulfillmentPolicyId || undefined}>
+                        <option key={p.id} value={p.id}>
                           {p.name}
                         </option>
                       ))}
@@ -633,10 +633,10 @@ export default function EbaySettings() {
                 <s-box padding="base" borderWidth="base" borderRadius="base">
                   <s-stack direction="block" gap="small">
                     <s-text type="strong">Payment Policy</s-text>
-                    <select name="paymentPolicyId" style={{ width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #ccc" }}>
+                    <select name="paymentPolicyId" defaultValue={selectedPolicies.paymentPolicyId || ""} style={{ width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #ccc" }}>
                       <option value="">— Select —</option>
                       {policies.payment.map((p) => (
-                        <option key={p.id} value={p.id} selected={p.id === selectedPolicies.paymentPolicyId || undefined}>
+                        <option key={p.id} value={p.id}>
                           {p.name}
                         </option>
                       ))}
@@ -646,10 +646,10 @@ export default function EbaySettings() {
                 <s-box padding="base" borderWidth="base" borderRadius="base">
                   <s-stack direction="block" gap="small">
                     <s-text type="strong">Return Policy</s-text>
-                    <select name="returnPolicyId" style={{ width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #ccc" }}>
+                    <select name="returnPolicyId" defaultValue={selectedPolicies.returnPolicyId || ""} style={{ width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #ccc" }}>
                       <option value="">— Select —</option>
                       {policies.return.map((p) => (
-                        <option key={p.id} value={p.id} selected={p.id === selectedPolicies.returnPolicyId || undefined}>
+                        <option key={p.id} value={p.id}>
                           {p.name}
                         </option>
                       ))}

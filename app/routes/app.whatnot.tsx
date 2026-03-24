@@ -19,7 +19,6 @@ import { RelativeTime } from "../components/RelativeTime";
 
 interface LoaderData {
   lastExportDate: string | null;
-  lastPriceUpdateDate: string | null;
   productCount: number;
   productTypes: Array<{ type: string; count: number }>;
 }
@@ -38,18 +37,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     select: { createdAt: true, details: true },
   });
 
-  const lastPriceUpdate = await db.syncLog.findFirst({
-    where: { shopId: shop, action: "price_update" },
-    orderBy: { createdAt: "desc" },
-    select: { createdAt: true },
-  });
-
   const { totalProducts: productCount, typeCounts: productTypes } =
     await fetchProductTypeCounts(admin);
 
   return {
     lastExportDate: lastExport?.createdAt?.toISOString() ?? null,
-    lastPriceUpdateDate: lastPriceUpdate?.createdAt?.toISOString() ?? null,
     productCount,
     productTypes,
   } satisfies LoaderData;
@@ -102,32 +94,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
     });
 
-    const BATCH_SIZE = 25;
-    for (let i = 0; i < exportProducts.length; i += BATCH_SIZE) {
-      await Promise.all(
-        exportProducts.slice(i, i + BATCH_SIZE).map((p) => {
-          const productId = p.product.id as string;
-          return db.marketplaceListing.upsert({
-            where: {
-              shopId_shopifyProductId_marketplace: {
-                shopId: shop,
-                shopifyProductId: productId,
-                marketplace: "whatnot",
-              },
-            },
-            create: {
-              shopId: shop,
-              shopifyProductId: productId,
-              marketplace: "whatnot",
-              status: "active",
-              lastSyncedAt: new Date(),
-            },
-            update: { lastSyncedAt: new Date() },
-          });
-        }),
-      );
-    }
-
     const timestamp = new Date().toISOString().slice(0, 10);
     return { csv, filename: `whatnot-export-${timestamp}.csv`, productCount: csvData.length };
   }
@@ -146,20 +112,33 @@ const SUPPORTED_TYPES = ["Graded Card", "Graded Slab"];
 export default function WhatnotSettings() {
   const { lastExportDate, productTypes } =
     useLoaderData<typeof loader>();
-  const exportFetcher = useFetcher();
-  const isExporting = exportFetcher.state === "submitting";
+  const exportAllFetcher = useFetcher({ key: "export-all" });
+  const exportNewFetcher = useFetcher({ key: "export-new" });
+  const pricesFetcher = useFetcher({ key: "download-prices" });
+  const isExporting =
+    exportAllFetcher.state === "submitting" ||
+    exportNewFetcher.state === "submitting" ||
+    pricesFetcher.state === "submitting";
 
   const exportableCount = productTypes
     .filter((t) => SUPPORTED_TYPES.includes(t.type))
     .reduce((sum, t) => sum + t.count, 0);
 
-  // Trigger CSV download when export action completes
+  // Trigger CSV download when each export action completes
   useEffect(() => {
-    const data = exportFetcher.data as { csv?: string; filename?: string } | null;
-    if (data?.csv && data?.filename) {
-      downloadCSV(data.csv, data.filename);
-    }
-  }, [exportFetcher.data]);
+    const data = exportAllFetcher.data as { csv?: string; filename?: string } | null;
+    if (data?.csv && data?.filename) downloadCSV(data.csv, data.filename);
+  }, [exportAllFetcher.data]);
+
+  useEffect(() => {
+    const data = exportNewFetcher.data as { csv?: string; filename?: string } | null;
+    if (data?.csv && data?.filename) downloadCSV(data.csv, data.filename);
+  }, [exportNewFetcher.data]);
+
+  useEffect(() => {
+    const data = pricesFetcher.data as { csv?: string; filename?: string } | null;
+    if (data?.csv && data?.filename) downloadCSV(data.csv, data.filename);
+  }, [pricesFetcher.data]);
 
   return (
     <s-page heading="Whatnot">
@@ -195,26 +174,26 @@ export default function WhatnotSettings() {
             <s-divider />
 
             <s-stack direction="inline" gap="base" alignItems="center">
-              <exportFetcher.Form method="post">
+              <exportAllFetcher.Form method="post">
                 <input type="hidden" name="intent" value="export-csv" />
                 <input type="hidden" name="mode" value="all" />
                 <s-button variant="primary" type="submit" disabled={isExporting || undefined}>
                   {isExporting ? "Exporting..." : "Export All Products"}
                 </s-button>
-              </exportFetcher.Form>
-              <exportFetcher.Form method="post">
+              </exportAllFetcher.Form>
+              <exportNewFetcher.Form method="post">
                 <input type="hidden" name="intent" value="export-csv" />
                 <input type="hidden" name="mode" value="new" />
                 <s-button type="submit" disabled={isExporting || undefined}>
                   {isExporting ? "Exporting..." : "Export New Only"}
                 </s-button>
-              </exportFetcher.Form>
-              <exportFetcher.Form method="post">
+              </exportNewFetcher.Form>
+              <pricesFetcher.Form method="post">
                 <input type="hidden" name="intent" value="download-prices" />
                 <s-button type="submit" disabled={isExporting || undefined}>
                   Download Prices
                 </s-button>
-              </exportFetcher.Form>
+              </pricesFetcher.Form>
             </s-stack>
 
             <s-text color="subdued">

@@ -23,7 +23,6 @@ import {
   marketplaceLabel,
   type MarketplaceKey,
 } from "../lib/marketplace-config";
-import { EmptyState } from "../components/EmptyState";
 import { RelativeTime } from "../components/RelativeTime";
 import { StatCard } from "../components/StatCard";
 import { AttentionZone } from "../components/dashboard/AttentionZone";
@@ -317,6 +316,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const result = await fetchAndCreatePriceSuggestions(admin, shop);
       return { fetchResult: result };
     } catch (err) {
+      console.error("Failed to fetch price suggestions:", err instanceof Error ? err.stack : err);
       return { error: err instanceof Error ? err.message : "Failed to fetch prices" };
     }
   }
@@ -361,7 +361,6 @@ export default function Dashboard() {
   const {
     products,
     productCount,
-    activeProductCount,
     marketplaces,
     recentLogs,
     listingsByProduct,
@@ -463,8 +462,6 @@ export default function Dashboard() {
                   connected={true}
                   isShopify={true}
                   activeCount={productCount}
-                  secondaryCount={activeProductCount}
-                  secondaryLabel="active"
                 />
               </s-grid-item>
 
